@@ -49,20 +49,21 @@ Dhanapalana is a full-stack web application designed to help individuals track, 
 
 ## 📋 Prerequisites
 
-- 🐳 Docker and Docker Compose
+- 🐳 Docker Desktop with Docker Compose support
 - 🟢 Node.js 16+ (for local development)
 - 📚 Git
+- 🔑 A valid `JWT_SECRET` value
 
 ## 🚀 Installation
 
 1. **📥 Clone the repository:**
    ```bash
-   git clone <repository-url>
-   cd dhanapalana
+   git clone https://github.com/H20-Jenish/Dhanapalana.git
+   cd Dhanapalana
    ```
 
 2. **⚙️ Set up environment variables:**
-   Create a `.env` file in the project root:
+   Create a `.env` file in the project root and add values for your database and auth settings:
    ```env
    DB_USER=your_db_user
    DB_PASSWORD=your_db_password
@@ -70,39 +71,49 @@ Dhanapalana is a full-stack web application designed to help individuals track, 
    JWT_SECRET=your_jwt_secret
    TELEGRAM_BOT_TOKEN=your_telegram_token
    NGROK_TOKEN=your_ngrok_token
+   CORS_ALLOWED_ORIGINS=http://localhost:3000
    ```
 
-3. **📦 Install dependencies:**
+3. **📦 Install dependencies for local development (optional):**
    ```bash
-   # Backend
    cd backend
    npm install
 
-   # Frontend
    cd ../frontend
    npm install
    ```
 
-4. **🔐 Generate SSL certificates (for production):**
+4. **▶️ Start the application using Docker Compose (recommended):**
    ```bash
-   cd nginx_setup/nginx-certs
-   # Follow HowTo.txt for certificate generation
+   cd ..
+   docker compose up --build -d
    ```
 
-5. **▶️ Start the application:**
-   ```bash
-   # From project root
-   docker-compose up --build
-   ```
+5. **🌐 Access the application:**
+   - Frontend: `http://localhost:3000`
+   - Backend API: `http://localhost:5000`
 
-6. **🌐 Access the application:**
-   Open `https://localhost` in your browser
+6. **🔧 Stop the application:**
+   ```bash
+   docker compose down
+   ```
 
 ## 💻 Local Development
 
-- **🎨 Frontend:** `cd frontend && npm start` (runs on port 3000)
-- **🚀 Backend:** `cd backend && npm start` (runs on port 5000)
-- **🐘 Database:** PostgreSQL runs in Docker container
+If you want to run the frontend and backend separately for development:
+
+- **Frontend:**
+  ```bash
+  cd frontend
+  npm start
+  ```
+- **Backend:**
+  ```bash
+  cd backend
+  npm start
+  ```
+
+> When running locally, ensure your `.env` file points to the same database used by the backend container or change database connection settings accordingly.
 
 ## 📚 API Documentation
 
