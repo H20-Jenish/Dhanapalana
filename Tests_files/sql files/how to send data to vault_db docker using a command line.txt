@@ -1,0 +1,1 @@
+Get-Content test.sql | docker exec -i vault_db psql -U admin -d initial_db

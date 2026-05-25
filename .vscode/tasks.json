@@ -1,0 +1,83 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "recreate-backend-service",
+			"type": "shell",
+			"command": "docker compose up -d --force-recreate backend",
+			"isBackground": false
+		},
+		{
+			"label": "check-backend-logs-tail",
+			"type": "shell",
+			"command": "docker logs vault_backend --tail 120",
+			"isBackground": false
+		},
+		{
+			"label": "simulate-telegram-webhook-query",
+			"type": "shell",
+			"command": "$chatId = (docker exec vault_db psql -U admin -d initial_db -At -c \"SELECT value FROM system_settings WHERE key='TELEGRAM_CHAT_ID' LIMIT 1;\").Trim(); $payload = @{ message = @{ text = 'Can you tell me last months total grocery expense?'; chat = @{ id = [int64]$chatId } } } | ConvertTo-Json -Depth 6; Invoke-WebRequest -Uri \"https://nonpharmaceutical-charlena-vulpine.ngrok-free.dev/api/telegram/webhook\" -Method Post -ContentType \"application/json\" -Body $payload | Select-Object StatusCode,StatusDescription",
+			"isBackground": false
+		},
+		{
+			"label": "get-telegram-chat-id",
+			"type": "shell",
+			"command": "docker exec vault_db psql -U admin -d initial_db -At -c \"SELECT value FROM system_settings WHERE key='TELEGRAM_CHAT_ID' LIMIT 1;\"",
+			"isBackground": false
+		},
+		{
+			"label": "get-telegram-chat-id-2",
+			"type": "shell",
+			"command": "docker exec vault_db psql -U admin -d initial_db -At -c 'SELECT value FROM system_settings WHERE key=''TELEGRAM_CHAT_ID'' LIMIT 1;'",
+			"isBackground": false
+		},
+		{
+			"label": "simulate-telegram-webhook-query-2",
+			"type": "shell",
+			"command": "$payload = '{\"message\":{\"text\":\"Can you tell me last months total grocery expense?\",\"chat\":{\"id\":944587722}}}'; Invoke-WebRequest -Uri \"https://nonpharmaceutical-charlena-vulpine.ngrok-free.dev/api/telegram/webhook\" -Method Post -ContentType \"application/json\" -Body $payload | Select-Object StatusCode,StatusDescription",
+			"isBackground": false
+		},
+		{
+			"label": "check-backend-after-simulated-query",
+			"type": "shell",
+			"command": "docker logs vault_backend --tail 120",
+			"isBackground": false
+		},
+		{
+			"label": "verify-live-serverjs-contains-shortcut",
+			"type": "shell",
+			"command": "docker exec vault_backend sh -lc \"grep -n 'Deterministic shortcut for common aggregate expense phrasing' /app/server.js; grep -n 'normalizedUserQuery' /app/server.js\"",
+			"isBackground": false
+		},
+		{
+			"label": "verify-live-serverjs-shortcut-1",
+			"type": "shell",
+			"command": "docker exec vault_backend sh -lc \"grep -n 'Deterministic shortcut for common aggregate expense phrasing' /app/server.js\"",
+			"isBackground": false
+		},
+		{
+			"label": "verify-live-serverjs-shortcut-2",
+			"type": "shell",
+			"command": "docker exec vault_backend sh -lc 'grep -n \"Deterministic shortcut for common aggregate expense phrasing\" /app/server.js'",
+			"isBackground": false
+		},
+		{
+			"label": "recreate-backend-service-again",
+			"type": "shell",
+			"command": "docker compose up -d --force-recreate backend",
+			"isBackground": false
+		},
+		{
+			"label": "simulate-query-with-curl",
+			"type": "shell",
+			"command": "curl.exe -s -o NUL -w \"%{http_code}\" -H \"Content-Type: application/json\" -d \"{\\\"message\\\":{\\\"text\\\":\\\"Can you tell me last months total grocery expense?\\\",\\\"chat\\\":{\\\"id\\\":944587722}}}\" \"https://nonpharmaceutical-charlena-vulpine.ngrok-free.dev/api/telegram/webhook\"",
+			"isBackground": false
+		},
+		{
+			"label": "tail-backend-after-curl",
+			"type": "shell",
+			"command": "docker logs vault_backend --tail 120",
+			"isBackground": false
+		}
+	]
+}

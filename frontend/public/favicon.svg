@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <!-- Premium Gradient: Teal (Growth) to Gold (Success) -->
+    <linearGradient id="financeGradient" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#39FF14;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#FFBF00;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <!-- Deep Sapphire Blue Base (Trust/Security context) -->
+  <rect width="128" height="128" rx="28" fill="#0B3150" />
+
+  <!-- The Interconnected Icon (Teal/Gold Gradient) -->
+  <g stroke="url(#financeGradient)" stroke-width="8" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Outer Protective Hexagon Vault -->
+    <path d="M64 5 L120 38 V90 L64 123 L8 90 V38 Z" />
+    
+    <!-- Central Integrated Symbol (Growth/Security) -->
+    <!-- The upward-breaking Arrow -->
+    <path d="M64 110 V20" />
+    <path d="M44 40 L64 10 L84 40" />
+    
+    <!-- The left interlocking link (Node 1) -->
+    <path d="M30 100 L30 60 H50" />
+    
+    <!-- The right interlocking link (Node 2) -->
+    <path d="M98 110 L98 70 H78" />
+  </g>
+</svg>

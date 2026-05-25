@@ -1,0 +1,165 @@
+# Dhanapālana - Personal Finance Management System
+# Docker Compose Configuration
+#
+# This docker-compose.yml file defines the complete containerized architecture
+# for the Dhanapālana personal finance application. It orchestrates multiple
+# services including frontend, backend, database, AI engine, and reverse proxy.
+#
+# ARCHITECTURAL OVERVIEW:
+# - Multi-service containerized application
+# - Network segmentation for security (edge, app, airgap networks)
+# - Persistent data volumes for database and backups
+# - Automatic service dependency management
+# - Health monitoring and restart policies
+#
+# SECURITY DESIGN:
+# - Network isolation: airgap_net for internal services only
+# - External access through nginx reverse proxy
+# - SSL/TLS termination at edge
+# - Docker socket access restricted to backend only
+# - Root user for backend (required for Docker operations)
+#
+# SERVICES ARCHITECTURE:
+# frontend: React.js web application (port 3000 internal)
+# backend: Express.js API server with Docker management capabilities
+# db: PostgreSQL 13 database with persistent storage
+# ollama: Local AI model server with custom fine-tuned model
+# nginx: Reverse proxy with SSL termination and load balancing
+#
+# NETWORK SEGMENTS:
+# edge_net: External access network (internet-facing)
+# app_net: Application services network (frontend, backend, nginx)
+# airgap_net: Isolated internal network (backend, db, ollama only)
+#
+# DATA PERSISTENCE:
+# vault_pgdata: PostgreSQL database files
+# vault_backups: Automated backup storage
+# ollama_data: AI model storage and cache
+#
+# DEPLOYMENT NOTES:
+# - Requires .env file with DB_USER, DB_PASSWORD, DB_NAME
+# - First run initializes system and builds AI model
+# - Nginx handles SSL certificates from nginx-certs directory
+# - Backend has Docker socket access for container management
+
+version: '3.8'
+
+services:
+  # FRONTEND SERVICE: React.js Web Application
+  # Serves the user interface with hot reloading in development
+  frontend:
+    build: ./frontend
+    container_name: vault_frontend
+    environment:
+      - CHOKIDAR_USEPOLLING=true  # Enable polling for file watching in containers
+    restart: unless-stopped
+    networks:
+      - app_net  # Application network for backend communication
+    depends_on:
+      - backend  # Wait for backend to be ready
+
+  # BACKEND SERVICE: Express.js API Server
+  # Core application logic with Docker management capabilities
+  backend:
+    build: ./backend
+    container_name: vault_backend
+    user: root  # Required for Docker socket access and system operations
+    environment:
+      - TZ=America/Toronto  # System timezone
+      - DB_USER=${DB_USER}  # Database credentials from environment
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=${DB_NAME}
+      - DB_HOST=db  # Database service name
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro  # Docker socket for container management
+      - vault_backups:/backups  # Persistent backup storage
+      - ./backend/server.js:/app/server.js:ro  # Keep runtime API logic aligned with workspace fixes
+    networks:
+      - app_net   # Application network for frontend communication
+      - airgap_net  # Isolated network for database and AI access
+    depends_on:
+      - db  # Database must be ready first
+
+  # DATABASE SERVICE: PostgreSQL 13
+  # Persistent data storage for financial records and user data
+  db:
+    image: postgres:13
+    container_name: vault_db
+    restart: unless-stopped
+    environment:
+      - TZ=America/Toronto  # Consistent timezone
+      - POSTGRES_USER=${DB_USER}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_DB=${DB_NAME}
+    volumes:
+      - vault_pgdata:/var/lib/postgresql/data  # Persistent database files
+    networks:
+      - airgap_net  # Isolated network, no external access
+
+  # AI SERVICE: Ollama with Custom Model
+  # Local AI model server with fine-tuned coding assistant
+  ollama:
+    image: ollama/ollama:latest
+    container_name: vault_ollama
+    tty: true  # Required for interactive shell operations
+    volumes:
+      - ollama_data:/root/.ollama  # AI model storage
+      - "./vault_ai/model_build:/models:ro"  # Local model files and Modelfile
+    entrypoint: /bin/sh
+    command:
+      - "-c"
+      - |
+        ollama serve &  # Start Ollama server in background
+        echo "Waiting for Ollama internal API..."
+        sleep 5  # Allow server to initialize
+        cd /models
+        if ollama list | grep -q "vault-coder"; then
+          echo "Model 'vault-coder' already exists. Skipping build."
+        else
+          echo "Building 'vault-coder' from Modelfile..."
+          ollama create vault-coder -f Modelfile  # Build custom model
+        fi
+        echo "AI Engine is fully operational."
+        wait  # Keep container running
+    networks:
+      - airgap_net  # Isolated network for security
+    restart: unless-stopped
+
+  # REVERSE PROXY: Nginx with SSL Termination
+  # Handles external traffic, SSL, and load balancing
+  nginx:
+    image: nginx:alpine
+    container_name: vault_nginx
+    ports:
+      - "80:80"    # HTTP port
+      - "443:443"  # HTTPS port
+    volumes:
+      - ./nginx_setup/nginx.conf:/etc/nginx/nginx.conf:ro  # Nginx configuration
+      - ./nginx_setup/nginx-certs:/etc/nginx/ssl:ro  # SSL certificates
+    depends_on:
+      - frontend  # Frontend must be ready
+      - backend   # Backend must be ready
+    networks:
+      - edge_net   # External access network
+      - app_net    # Internal application network
+    restart: always
+
+# PERSISTENT VOLUMES: Data that survives container restarts
+volumes:
+  vault_pgdata:    # PostgreSQL database files
+    name: vault_pgdata
+    external: false
+  ollama_data:     # AI model data and cache
+    name: vault_ollama_data
+  vault_backups:   # Automated backup files
+    name: vault_backups
+
+# DOCKER NETWORKS: Service communication and isolation
+networks:
+  edge_net:    # External/internet-facing network
+    driver: bridge
+  app_net:     # Application services network
+    driver: bridge
+  airgap_net:  # Isolated internal network (no external access)
+    internal: true
