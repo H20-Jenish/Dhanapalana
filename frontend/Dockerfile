@@ -38,5 +38,6 @@ COPY --from=build /app/build ./build
 # Maintain the exposed port to seamlessly connect with the master Nginx reverse proxy
 EXPOSE 3000
 
-# Execute the static server, routing all requests (-s) to the index.html on port 3000 (-l)
-CMD ["serve", "-s", "build", "-l", "3000"]
+# Execute the static server, routing all requests (-s) to the index.html on port 3000.
+# Bind to 0.0.0.0 so nginx can reach the container over the Docker network.
+CMD ["serve", "-s", "build", "-l", "tcp://0.0.0.0:3000"]
