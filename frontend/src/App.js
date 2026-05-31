@@ -178,6 +178,8 @@ const SunIcon = () => (<svg width="18" height="18" viewBox="0 0 24 24" fill="non
 const MoonIcon = () => (<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>);
 const BellIcon = () => (<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>);
 
+const DEFAULT_AUTO_LOGOUT_TIMEOUT_MINUTES = 15;
+
 /**
  * NAVITEM COMPONENT
  * Reusable navigation link component for sidebar menu
@@ -448,15 +450,18 @@ const MainLayout = ({ username, handleLogout, theme, toggleTheme }) => {
  * @param {Object} props - Component props
  * @param {Function} props.onLogout - Callback function executed when auto-logout triggers
  */
-const AutoLogout = ({ onLogout }) => {
+const AutoLogout = ({ onLogout, timeoutMinutes }) => {
   useEffect(() => {
+    const parsedTimeout = Number(timeoutMinutes);
+    if (!Number.isFinite(parsedTimeout) || parsedTimeout <= 0) return;
+
     let timer;
     const resetTimer = () => {
       clearTimeout(timer);
       timer = setTimeout(() => {
-        alert("🔒 For your security, you have been logged out due to 15 minutes of inactivity.");
+        alert(`🔒 For your security, you have been logged out due to ${parsedTimeout} minutes of inactivity.`);
         onLogout();
-      }, 15 * 60 * 1000); // 15 minutes
+      }, parsedTimeout * 60 * 1000);
     };
 
     // Listen for any of these actions to keep the session alive
@@ -470,7 +475,7 @@ const AutoLogout = ({ onLogout }) => {
       clearTimeout(timer);
       events.forEach(e => window.removeEventListener(e, resetTimer));
     };
-  }, [onLogout]);
+  }, [onLogout, timeoutMinutes]);
 
   return null;
 };
@@ -510,6 +515,7 @@ function App() {
    */
   const [token, setToken] = useState(localStorage.getItem('token'));
   const [theme, setTheme] = useState(localStorage.getItem('theme') || 'dark');
+  const [autoLogoutTimeoutMinutes, setAutoLogoutTimeoutMinutes] = useState(DEFAULT_AUTO_LOGOUT_TIMEOUT_MINUTES);
   const username = localStorage.getItem('username') || '';
 
   // CRITICAL SECURITY: Synchronous Axios token injection
@@ -522,6 +528,26 @@ function App() {
 
   useEffect(() => { localStorage.setItem('theme', theme); }, [theme]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const fetchAutoLogoutTimeout = async () => {
+      try {
+        const res = await axios.get('/api/system-settings/security');
+        if (cancelled) return;
+
+        const parsedTimeout = Number(res.data?.AUTO_LOGOUT_TIMEOUT_MINUTES);
+        setAutoLogoutTimeoutMinutes(Number.isFinite(parsedTimeout) ? parsedTimeout : DEFAULT_AUTO_LOGOUT_TIMEOUT_MINUTES);
+      } catch (err) {
+        if (!cancelled) setAutoLogoutTimeoutMinutes(DEFAULT_AUTO_LOGOUT_TIMEOUT_MINUTES);
+      }
+    };
+
+    if (token) fetchAutoLogoutTimeout();
+
+    return () => { cancelled = true; };
+  }, [token]);
+
   const toggleTheme = () => setTheme(prev => prev === 'dark' ? 'light' : 'dark');
   
   // Exiting safely cleans the state and the local storage
@@ -533,7 +559,7 @@ function App() {
     <Router>
       <React.Fragment>
         {/* INJECTED AUTO-LOGOUT COMPONENT */}
-        <AutoLogout onLogout={handleLogout} />
+        <AutoLogout onLogout={handleLogout} timeoutMinutes={autoLogoutTimeoutMinutes} />
         
         {theme === 'light' && <style>{lightThemeCSS}</style>}
         <div className="aurora-bg"></div>

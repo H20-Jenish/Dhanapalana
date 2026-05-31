@@ -96,6 +96,7 @@ const Admin = () => {
   const [dockerLogs, setDockerLogs] = useState([]);
   const [backups, setBackups] = useState([]);
   const [scheduleConfig, setScheduleConfig] = useState({ BACKUP_FREQ: 'none', BACKUP_TIME: '02:00', BACKUP_DAY: '1' });
+  const [securityConfig, setSecurityConfig] = useState({ AUTO_LOGOUT_TIMEOUT_MINUTES: '15' });
   
   const [newUsername, setNewUsername] = useState('');
   const [newUserPassword, setNewUserPassword] = useState('');
@@ -153,6 +154,12 @@ const Admin = () => {
     } catch (err) { alert("Failed to sync Backup matrix."); }
   };
 
+  const fetchSecuritySettings = async () => {
+    try {
+      setSecurityConfig((await axios.get(`${API_URL}/system-settings/security`, getAuthHeaders())).data);
+    } catch (err) { alert("Failed to sync Security settings."); }
+  };
+
   // --- BACKUP MANAGEMENT LOGIC ---
   const triggerManualBackup = async () => {
     if(!window.confirm("Trigger a manual backup snapshot?")) return;
@@ -203,6 +210,17 @@ const Admin = () => {
       await axios.post(`${API_URL}/system-settings/backup`, { freq: scheduleConfig.BACKUP_FREQ, time: scheduleConfig.BACKUP_TIME, day: scheduleConfig.BACKUP_DAY }, getAuthHeaders());
       alert("Automated backup schedule updated!");
     } catch(err) { alert("Failed to save schedule."); }
+  };
+
+  const saveSecuritySettings = async (e) => {
+    e.preventDefault();
+    try {
+      await axios.post(`${API_URL}/system-settings/security`, {
+        autoLogoutTimeoutMinutes: securityConfig.AUTO_LOGOUT_TIMEOUT_MINUTES,
+      }, getAuthHeaders());
+      alert("Login timeout updated!");
+      fetchSecuritySettings();
+    } catch(err) { alert(err.response?.data?.error || "Failed to save login timeout."); }
   };
 
   const handleImportBackup = (e) => {
@@ -307,7 +325,7 @@ const Admin = () => {
         <AdminCard icon={<IconDatabase />} title="Backup Management" description="Schedule, manage, and restore system snapshots." accentColor="#3b82f6" onClick={() => { setActiveModal('backups'); fetchBackups(); setBackupTab('manage'); }} />
         <AdminCard icon={<IconLogs />} title="System Audit Logs" description="Track administrative configuration events." accentColor="#f59e0b" onClick={() => setActiveModal('audit')} />
         <AdminCard icon={<IconTerminal />} title="Container Logs" description="Real-time Docker service log aggregation." accentColor="#10b981" onClick={() => { setActiveModal('docker'); fetchDockerLogs(); }} />
-        <AdminCard icon={<IconShield />} title="Security & MFA" description={`Current Status: ${isMfaEnabled ? 'Enabled' : 'Disabled'}`} accentColor={isMfaEnabled ? '#10b981' : '#ef4444'} onClick={() => setActiveModal('mfa')} />
+        <AdminCard icon={<IconShield />} title="Security & MFA" description={`Current Status: ${isMfaEnabled ? 'Enabled' : 'Disabled'} • Login timeout: ${securityConfig.AUTO_LOGOUT_TIMEOUT_MINUTES === '0' ? 'Disabled' : `${securityConfig.AUTO_LOGOUT_TIMEOUT_MINUTES || '15'} min`}`} accentColor={isMfaEnabled ? '#10b981' : '#ef4444'} onClick={() => { setActiveModal('mfa'); fetchSecuritySettings(); }} />
         <AdminCard icon={<IconUsers />} title="User Management" description="Add users, assign roles, and revoke system access." accentColor="#0ea5e9" onClick={() => setActiveModal('users')} />
         <AdminCard icon={<IconAI />} title="AI Query Designer" description="Manage the few-shot examples that teach the AI to understand your financial questions." accentColor="#8b5cf6" onClick={openAiModal} />
       </div>
@@ -457,6 +475,17 @@ const Admin = () => {
           <p className="text-muted" style={{ marginBottom: '24px', lineHeight: 1.5 }}>Protect your Vault with an Authenticator app. Highly recommended for Administrators.</p>
           {!isMfaEnabled && !mfaSetup && <button onClick={generateMfa} className="glass-button glass-button-warning" style={{ width: '100%', padding: '14px' }}>Setup Authenticator App</button>}
           {isMfaEnabled && <button onClick={disableMfa} className="glass-button glass-button-danger" style={{ width: '100%', padding: '14px' }}>Disable MFA Protection</button>}
+          <div style={{ marginTop: '28px', padding: '20px', border: '1px solid rgba(150,150,150,0.12)', borderRadius: '12px' }}>
+            <h4 style={{ margin: '0 0 8px 0' }}>Login Timeout</h4>
+            <p className="text-muted" style={{ margin: '0 0 16px 0', fontSize: '14px', lineHeight: 1.5 }}>Set how long inactive users stay logged in. Use <strong>0</strong> to disable automatic logout.</p>
+            <form onSubmit={saveSecuritySettings} style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'end' }}>
+              <div style={{ flex: '1 1 220px' }}>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, marginBottom: '8px' }}>Timeout (minutes)</label>
+                <input type="number" min="0" max="1440" value={securityConfig.AUTO_LOGOUT_TIMEOUT_MINUTES} onChange={e => setSecurityConfig({ ...securityConfig, AUTO_LOGOUT_TIMEOUT_MINUTES: e.target.value })} className="glass-input" style={{ width: '100%', padding: '12px' }} />
+              </div>
+              <button type="submit" className="glass-button" style={{ padding: '12px 18px', fontWeight: 700 }}>Save Timeout</button>
+            </form>
+          </div>
           {mfaSetup && !isMfaEnabled && (
             <div style={{ display: 'flex', gap: '24px', alignItems: 'center' }}>
               <img src={mfaSetup.qrCodeUrl} alt="QR" style={{ width: '160px', height: '160px', borderRadius: '8px', border: '4px solid white', background: 'white' }} />

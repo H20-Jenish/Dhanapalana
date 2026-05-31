@@ -41,21 +41,21 @@ import { useEffect } from 'react';
  *
  * @returns {null} - Headless component, renders nothing
  */
-const AutoLogout = () => {
-  // Security timeout: 15 minutes of inactivity triggers logout
-  const IDLE_TIMEOUT = 15 * 60 * 1000;
+const AutoLogout = ({ timeoutMinutes = 15 }) => {
+  const parsedTimeout = Number(timeoutMinutes);
+  const IDLE_TIMEOUT = Number.isFinite(parsedTimeout) && parsedTimeout > 0 ? parsedTimeout * 60 * 1000 : null;
 
   useEffect(() => {
     // SECURITY CHECK: Only activate if user is logged in
     // Prevents unnecessary event listeners when not authenticated
-    if (!localStorage.getItem('token')) return;
+    if (!localStorage.getItem('token') || !IDLE_TIMEOUT) return;
 
     let timer;
 
     // LOGOUT HANDLER: Executes when inactivity timeout expires
     const handleLogout = () => {
       localStorage.clear(); // Complete session cleanup
-      alert("🔒 For your security, you have been logged out due to 15 minutes of inactivity.");
+      alert(`🔒 For your security, you have been logged out due to ${parsedTimeout} minutes of inactivity.`);
       window.location.href = '/'; // Redirect to login page
     };
 
@@ -85,7 +85,7 @@ const AutoLogout = () => {
       clearTimeout(timer);
       activityEvents.forEach(event => window.removeEventListener(event, resetTimer));
     };
-  }, []);
+  }, [IDLE_TIMEOUT, parsedTimeout]);
 
   // HEADLESS COMPONENT: Returns null, runs invisibly in background
   return null;

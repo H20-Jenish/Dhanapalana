@@ -986,6 +986,33 @@ app.get('/api/system-settings/backup', isAdmin, async (req, res) => {
     } catch(e) { res.status(500).json({error: e.message}); }
 });
 
+app.get('/api/system-settings/security', async (req, res) => {
+  try {
+    const settings = await pool.query("SELECT value FROM system_settings WHERE key = 'AUTO_LOGOUT_TIMEOUT_MINUTES'");
+    const timeoutMinutes = settings.rows.length > 0 ? settings.rows[0].value : '15';
+    res.json({ AUTO_LOGOUT_TIMEOUT_MINUTES: timeoutMinutes });
+  } catch(e) { res.status(500).json({error: e.message}); }
+});
+
+app.post('/api/system-settings/security', isAdmin, async (req, res) => {
+  const { autoLogoutTimeoutMinutes } = req.body;
+  try {
+    const normalized = autoLogoutTimeoutMinutes === '' || autoLogoutTimeoutMinutes === null || autoLogoutTimeoutMinutes === undefined
+      ? '15'
+      : String(autoLogoutTimeoutMinutes);
+    const parsedTimeout = Number(normalized);
+
+    if (!Number.isFinite(parsedTimeout) || parsedTimeout < 0 || parsedTimeout > 1440) {
+      return res.status(400).json({ error: 'Timeout must be a number between 0 and 1440 minutes.' });
+    }
+
+    const value = String(Math.floor(parsedTimeout));
+    await pool.query('INSERT INTO system_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value', ['AUTO_LOGOUT_TIMEOUT_MINUTES', value]);
+    await logAction(`Auto logout timeout updated to ${value === '0' ? 'disabled' : `${value} minutes`}`);
+    res.json({ success: true, AUTO_LOGOUT_TIMEOUT_MINUTES: value });
+  } catch(e) { res.status(500).json({error: e.message}); }
+});
+
 app.post('/api/system-settings/backup', isAdmin, async (req, res) => {
     const { freq, time, day } = req.body;
     try {
