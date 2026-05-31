@@ -230,15 +230,30 @@ const Admin = () => {
     } catch(err) { alert(err.response?.data?.error || "Failed to save login timeout."); }
   };
 
+  const persistAutoLogoutSetting = async (enabled, minutes = null) => {
+    const nextValue = enabled ? String(minutes || autoLogoutRestoreMinutes || '15') : '0';
+    try {
+      await axios.post(`${API_URL}/system-settings/security`, {
+        autoLogoutTimeoutMinutes: nextValue,
+      }, getAuthHeaders());
+      setSecurityConfig({ AUTO_LOGOUT_TIMEOUT_MINUTES: nextValue });
+      setAutoLogoutEnabled(enabled);
+      if (enabled && nextValue !== '0') setAutoLogoutRestoreMinutes(nextValue);
+    } catch (err) {
+      alert(err.response?.data?.error || 'Failed to update login timeout.');
+      fetchSecuritySettings();
+    }
+  };
+
   const handleAutoLogoutToggle = (enabled) => {
-    setAutoLogoutEnabled(enabled);
     if (enabled) {
       const restoredMinutes = autoLogoutRestoreMinutes && autoLogoutRestoreMinutes !== '0' ? autoLogoutRestoreMinutes : '15';
-      setSecurityConfig({ AUTO_LOGOUT_TIMEOUT_MINUTES: restoredMinutes });
-    } else {
-      setAutoLogoutRestoreMinutes(securityConfig.AUTO_LOGOUT_TIMEOUT_MINUTES !== '0' ? securityConfig.AUTO_LOGOUT_TIMEOUT_MINUTES : autoLogoutRestoreMinutes);
-      setSecurityConfig({ AUTO_LOGOUT_TIMEOUT_MINUTES: '0' });
+      persistAutoLogoutSetting(true, restoredMinutes);
+      return;
     }
+
+    setAutoLogoutRestoreMinutes(securityConfig.AUTO_LOGOUT_TIMEOUT_MINUTES !== '0' ? securityConfig.AUTO_LOGOUT_TIMEOUT_MINUTES : autoLogoutRestoreMinutes);
+    persistAutoLogoutSetting(false);
   };
 
   const handleImportBackup = (e) => {
@@ -495,7 +510,7 @@ const Admin = () => {
           {isMfaEnabled && <button onClick={disableMfa} className="glass-button glass-button-danger" style={{ width: '100%', padding: '14px' }}>Disable MFA Protection</button>}
           <div style={{ marginTop: '28px', padding: '20px', border: '1px solid rgba(150,150,150,0.12)', borderRadius: '12px' }}>
             <h4 style={{ margin: '0 0 8px 0' }}>Login Timeout</h4>
-            <p className="text-muted" style={{ margin: '0 0 16px 0', fontSize: '14px', lineHeight: 1.5 }}>Set how long inactive users stay logged in. Use <strong>0</strong> to disable automatic logout.</p>
+            <p className="text-muted" style={{ margin: '0 0 16px 0', fontSize: '14px', lineHeight: 1.5 }}>Set how long inactive users stay logged in.</p>
             <form onSubmit={saveSecuritySettings} style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'end' }}>
               <div style={{ flex: '1 1 220px' }}>
                 <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, marginBottom: '8px' }}>Auto Logout</label>
