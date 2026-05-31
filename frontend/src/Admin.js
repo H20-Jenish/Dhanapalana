@@ -97,6 +97,8 @@ const Admin = () => {
   const [backups, setBackups] = useState([]);
   const [scheduleConfig, setScheduleConfig] = useState({ BACKUP_FREQ: 'none', BACKUP_TIME: '02:00', BACKUP_DAY: '1' });
   const [securityConfig, setSecurityConfig] = useState({ AUTO_LOGOUT_TIMEOUT_MINUTES: '15' });
+  const [autoLogoutEnabled, setAutoLogoutEnabled] = useState(true);
+  const [autoLogoutRestoreMinutes, setAutoLogoutRestoreMinutes] = useState('15');
   
   const [newUsername, setNewUsername] = useState('');
   const [newUserPassword, setNewUserPassword] = useState('');
@@ -156,7 +158,12 @@ const Admin = () => {
 
   const fetchSecuritySettings = async () => {
     try {
-      setSecurityConfig((await axios.get(`${API_URL}/system-settings/security`, getAuthHeaders())).data);
+      const response = await axios.get(`${API_URL}/system-settings/security`, getAuthHeaders());
+      const timeoutMinutes = String(response.data?.AUTO_LOGOUT_TIMEOUT_MINUTES ?? '15');
+      setSecurityConfig({ AUTO_LOGOUT_TIMEOUT_MINUTES: timeoutMinutes });
+      const enabled = timeoutMinutes !== '0';
+      setAutoLogoutEnabled(enabled);
+      if (enabled) setAutoLogoutRestoreMinutes(timeoutMinutes);
     } catch (err) { alert("Failed to sync Security settings."); }
   };
 
@@ -221,6 +228,17 @@ const Admin = () => {
       alert("Login timeout updated!");
       fetchSecuritySettings();
     } catch(err) { alert(err.response?.data?.error || "Failed to save login timeout."); }
+  };
+
+  const handleAutoLogoutToggle = (enabled) => {
+    setAutoLogoutEnabled(enabled);
+    if (enabled) {
+      const restoredMinutes = autoLogoutRestoreMinutes && autoLogoutRestoreMinutes !== '0' ? autoLogoutRestoreMinutes : '15';
+      setSecurityConfig({ AUTO_LOGOUT_TIMEOUT_MINUTES: restoredMinutes });
+    } else {
+      setAutoLogoutRestoreMinutes(securityConfig.AUTO_LOGOUT_TIMEOUT_MINUTES !== '0' ? securityConfig.AUTO_LOGOUT_TIMEOUT_MINUTES : autoLogoutRestoreMinutes);
+      setSecurityConfig({ AUTO_LOGOUT_TIMEOUT_MINUTES: '0' });
+    }
   };
 
   const handleImportBackup = (e) => {
@@ -480,8 +498,45 @@ const Admin = () => {
             <p className="text-muted" style={{ margin: '0 0 16px 0', fontSize: '14px', lineHeight: 1.5 }}>Set how long inactive users stay logged in. Use <strong>0</strong> to disable automatic logout.</p>
             <form onSubmit={saveSecuritySettings} style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'end' }}>
               <div style={{ flex: '1 1 220px' }}>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, marginBottom: '8px' }}>Auto Logout</label>
+                <button
+                  type="button"
+                  onClick={() => handleAutoLogoutToggle(!autoLogoutEnabled)}
+                  className="glass-button"
+                  style={{
+                    width: '100%',
+                    padding: '12px 14px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '12px',
+                    background: autoLogoutEnabled ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+                    borderColor: autoLogoutEnabled ? 'rgba(16, 185, 129, 0.35)' : 'rgba(239, 68, 68, 0.35)',
+                    color: 'inherit'
+                  }}
+                >
+                  <span style={{ fontWeight: 700 }}>{autoLogoutEnabled ? 'Enabled' : 'Disabled'}</span>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', width: '44px', height: '24px', borderRadius: '999px', padding: '3px', background: autoLogoutEnabled ? '#10b981' : '#ef4444', transition: 'background 0.2s ease' }}>
+                    <span style={{ width: '18px', height: '18px', borderRadius: '50%', background: '#fff', transform: autoLogoutEnabled ? 'translateX(20px)' : 'translateX(0)', transition: 'transform 0.2s ease' }} />
+                  </span>
+                </button>
+              </div>
+              <div style={{ flex: '1 1 220px', opacity: autoLogoutEnabled ? 1 : 0.55 }}>
                 <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, marginBottom: '8px' }}>Timeout (minutes)</label>
-                <input type="number" min="0" max="1440" value={securityConfig.AUTO_LOGOUT_TIMEOUT_MINUTES} onChange={e => setSecurityConfig({ ...securityConfig, AUTO_LOGOUT_TIMEOUT_MINUTES: e.target.value })} className="glass-input" style={{ width: '100%', padding: '12px' }} />
+                <input
+                  type="number"
+                  min="1"
+                  max="1440"
+                  value={autoLogoutEnabled ? securityConfig.AUTO_LOGOUT_TIMEOUT_MINUTES : ''}
+                  onChange={e => {
+                    const nextValue = e.target.value;
+                    setSecurityConfig({ AUTO_LOGOUT_TIMEOUT_MINUTES: nextValue });
+                    if (nextValue !== '0' && nextValue !== '') setAutoLogoutRestoreMinutes(nextValue);
+                  }}
+                  disabled={!autoLogoutEnabled}
+                  className="glass-input"
+                  style={{ width: '100%', padding: '12px' }}
+                />
               </div>
               <button type="submit" className="glass-button" style={{ padding: '12px 18px', fontWeight: 700 }}>Save Timeout</button>
             </form>
