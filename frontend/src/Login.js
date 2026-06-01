@@ -310,13 +310,13 @@ const Login = ({ onLogin }) => {
         {/* REGISTRATION STEP 3: API Hooks (Telegram/Ngrok) */}
         {mode === 'register' && regStep === 3 && (
           <form onSubmit={handleRegister} style={{ display: 'flex', flexDirection: 'column', gap: '14px', maxHeight: '60vh', overflowY: 'auto', paddingRight: '5px' }}>
-            <h3 style={{ margin: '0 0 4px 0', fontWeight: 600, textAlign: 'center' }}>Step 3: AI Integrations</h3>
-            <p style={{ color: 'var(--text-muted)', fontSize: '13px', margin: '0 0 8px 0', textAlign: 'center' }}>Connect services to enable the AI Agent.</p>
+            <h3 style={{ margin: '0 0 4px 0', fontWeight: 600, textAlign: 'center' }}>Step 3: Service Integrations</h3>
+            <p style={{ color: 'var(--text-muted)', fontSize: '13px', margin: '0 0 8px 0', textAlign: 'center' }}>Connect services to enable automated insights.</p>
 
             <div className="glass-card" style={{ padding: '14px', border: enableTelegram ? '1px solid #0088cc' : '1px solid var(--border-glass)' }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', fontWeight: 600, fontSize: '14px' }}>
                 <input type="checkbox" checked={enableTelegram} onChange={e => setEnableTelegram(e.target.checked)} style={{ width: '16px', height: '16px' }} />
-                Telegram AI Chat
+                Telegram Chat
               </label>
               {enableTelegram && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '12px' }}>
@@ -329,7 +329,7 @@ const Login = ({ onLogin }) => {
             <div className="glass-card" style={{ padding: '14px', border: enableNgrok ? '1px solid var(--accent-cyan)' : '1px solid var(--border-glass)', opacity: !enableTelegram ? 0.5 : 1, transition: 'opacity 0.2s' }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: enableTelegram ? 'pointer' : 'not-allowed', fontWeight: 600, fontSize: '14px' }}>
                 <input type="checkbox" checked={enableNgrok} onChange={e => setEnableNgrok(e.target.checked)} disabled={!enableTelegram} style={{ width: '16px', height: '16px' }} />
-                Ngrok Tunnel (Required for AI)
+                Ngrok Tunnel (Required for Telegram Webhook)
               </label>
               {enableNgrok && enableTelegram && (
                 <div style={{ marginTop: '12px' }}>

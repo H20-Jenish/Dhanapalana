@@ -6,7 +6,7 @@
  * Central Express.js API server for the Dhanapālana financial platform. 
  * Acts as the single source of truth for the database, enforces security protocols 
  * (JWT, MFA, role-based access), manages automated system backups, and orchestrates 
- * a local AI engine via a Telegram webhook interface.
+ * automated report generation via a Telegram webhook interface.
  */
 
 const express = require('express');
@@ -1576,7 +1576,7 @@ app.get('/api/reports/monthly/:month/download', async (req, res) => {
 
 const runHistoricalBackfill = async () => {};
 
-app.post('/api/reports/analyze/:month', async (req, res) => { res.status(410).json({ error: 'AI insights have been removed.' }); });
+app.post('/api/reports/analyze/:month', async (req, res) => { res.status(410).json({ error: 'Legacy insights endpoint has been removed.' }); });
 
 cron.schedule('0 10 1 * *', async () => {});
 

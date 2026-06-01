@@ -130,10 +130,10 @@ CREATE TABLE audit_logs (
 -- 6. ADVANCED FEATURES TABLES
 -- ===========================================
 
--- AI-generated monthly financial insights
+-- Auto-generated monthly financial insights
 CREATE TABLE ai_monthly_insights (
     month TEXT PRIMARY KEY,                    -- Month in YYYY-MM format
-    insights TEXT,                             -- AI-generated insights
+    insights TEXT,                             -- Auto-generated insights
     generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP -- When insights were generated
 );
 
@@ -214,12 +214,12 @@ INSERT INTO credit_cards (name, limit_amount) VALUES
 INSERT INTO account_types (name) VALUES ('Chequing'), ('Savings');
 
 -- ===========================================
--- 8. AI QUERY DESIGNER
+-- 8. QUERY DESIGNER
 -- ===========================================
 
--- Few-shot examples that teach the AI how to convert natural language to SQL.
--- Managed via the Admin → AI Query Designer panel. Included in all backups.
-CREATE TABLE ai_query_examples (
+-- Few-shot examples that teach the SQL generator how to convert natural language to SQL.
+-- Managed via the Admin -> Query Designer panel. Included in all backups.
+CREATE TABLE query_examples (
     id SERIAL PRIMARY KEY,
     question    TEXT NOT NULL,
     sql_query   TEXT NOT NULL,

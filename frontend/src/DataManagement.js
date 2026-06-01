@@ -181,7 +181,7 @@ const DataManagement = () => {
   };
 
   const handleSoftReset = async () => {
-    if (!(await showConfirm("⚠️ WARNING: This will delete ALL transactions, incomes, expenses, investments, and AI insights. Account balances will be reset to $0.\n\nYour categories, banks, settings, and users WILL BE SAVED.\n\nAre you sure you want to proceed?", { title: 'Confirm Soft Reset' }))) return;
+    if (!(await showConfirm("⚠️ WARNING: This will delete ALL transactions, incomes, expenses, investments, and generated insights. Account balances will be reset to $0.\n\nYour categories, banks, settings, and users WILL BE SAVED.\n\nAre you sure you want to proceed?", { title: 'Confirm Soft Reset' }))) return;
     setIsResetting(true);
     try {
       await axios.post(`${API_URL}/system/soft-reset`, {}, getAuthHeaders());

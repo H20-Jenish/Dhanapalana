@@ -36,7 +36,7 @@
 #
 # DEPLOYMENT NOTES:
 # - Requires .env file with DB_USER, DB_PASSWORD, DB_NAME
-# - First run initializes system and builds AI model
+# - First run initializes system services
 # - Nginx handles SSL certificates from nginx-certs directory
 # - Backend has Docker socket access for container management
 
@@ -76,7 +76,7 @@ services:
       - ./backend/server.js:/app/server.js:ro  # Keep runtime API logic aligned with workspace fixes
     networks:
       - app_net   # Application network for frontend communication
-      - airgap_net  # Isolated network for database and AI access
+      - airgap_net  # Isolated network for database access
     depends_on:
       - db  # Database must be ready first
 

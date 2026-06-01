@@ -1,15 +1,15 @@
 # 💰 Dhanapalana
 
-A comprehensive personal finance management web application with AI-powered insights and automated reporting.
+A comprehensive personal finance management web application with automated insights and reporting.
 
 ## 📊 Overview
 
-Dhanapalana is a full-stack web application designed to help individuals track, analyze, and optimize their personal finances. Built with modern web technologies and featuring an integrated AI assistant, it provides tools for managing income, expenses, savings, investments, transfers, and lending transactions.
+Dhanapalana is a full-stack web application designed to help individuals track, analyze, and optimize their personal finances. Built with modern web technologies and featuring integrated automation, it provides tools for managing income, expenses, savings, investments, transfers, and lending transactions.
 
 ## ✨ Features
 
 - **📈 Comprehensive Financial Tracking**: Log and categorize income, expenses, savings accounts, credit cards, investments, transfers, and lending
-- **🤖 AI-Powered Insights**: Vittaparāmarśadātā AI assistant generates monthly financial analysis, recommendations, and answers conversational Telegram queries with full context memory
+- **🤖 Automated Insights**: The insights engine generates monthly financial analysis, recommendations, and answers conversational Telegram queries with full context memory
 - **📊 Automated Reporting**: Monthly reports with charts, trends, and year-over-year comparisons
 - **📥 Downloadable Monthly Packs**: One-click monthly summary export with summary, income, expenses, bank balances, credit usage, investment changes, transfers, and lending details
 - **📌 Accurate Monthly Category Reports**: Expense categories only show actual spend for that month, with previous-month comparison for active categories
@@ -40,11 +40,9 @@ Dhanapalana is a full-stack web application designed to help individuals track, 
 - **🔒 bcryptjs** - Password hashing
 - **📋 Winston** - Logging framework
 
-### 🤖 AI & Integrations
-- **🧠 Ollama** - Local AI model hosting
-- **🎯 Qwen2.5 7B** - AI model for financial analysis and conversational queries (upgraded from Qwen2.5 Coder 3B)
+### 🤖 Integrations
 - **🌐 Ngrok** - Secure tunneling
-- **💬 Telegram Bot API** - Remote conversational assistant
+- **💬 Telegram Bot API** - Remote conversational interface
 
 ### 🏗️ Infrastructure
 - **🐳 Docker & Docker Compose** - Containerization and orchestration
@@ -139,7 +137,7 @@ If you want to run the frontend and backend separately for development:
 ### 📊 Reports & Analytics
 - `GET /api/reports/monthly` - Monthly financial reports
 - `GET /api/reports/monthly/:month/download` - Full monthly downloadable payload (YYYY-MM)
-- `POST /api/reports/analyze/:month` - Generate AI analysis
+- `POST /api/reports/analyze/:month` - Analyze monthly report
 
 ### 📈 Investments & Reminders
 - `GET /api/investments/:id/logs` - Investment log history for an asset
@@ -194,12 +192,12 @@ docker-compose up --build -d
 2. **🔐 Set up MFA:** Enable two-factor authentication for enhanced security
 3. **🏷️ Configure Categories:** Set up expense categories and account types
 4. **💵 Add Financial Data:** Log income, expenses, and manage accounts
-5. **📊 View Reports:** Access monthly reports with AI insights
+5. **📊 View Reports:** Access monthly reports with automated insights
 6. **💾 Manage Backups:** Schedule automated backups and restore when needed
 
 ## 🤖 Telegram Bot Integration
 
-The Telegram bot is a full conversational assistant — it remembers context within a session, so you can ask follow-up questions naturally.
+The Telegram bot is a full conversational interface with session memory, so you can ask follow-up questions naturally.
 
 Configure and use:
 
@@ -220,7 +218,7 @@ Configure and use:
                     ↓
              🚀 Backend (Express.js) ↔ 🐘 PostgreSQL
                     ↓
-             🤖 AI Engine (Ollama) → 🧠 Vittaparāmarśadātā
+             🤖 Analysis Engine → 📈 Monthly Insights
 ```
 
 ## 🤝 Contributing
@@ -246,7 +244,7 @@ For support and questions:
 
 ### Version 1.0.0
 - 🎉 Initial release with core financial tracking features
-- 🤖 AI-powered monthly insights
+- 🤖 Automated monthly insights
 - 🐳 Docker containerization
 - 🔐 MFA and security features
 - 💬 Telegram bot integration
@@ -264,13 +262,13 @@ For support and questions:
 - Replaced remaining native popup behavior with in-app modal dialog flows.
 
 ### 2026-05-02 (In-progress updates)
-- Added `ai_query_examples` persistence table and AI prompt examples storage.
-- Implemented Admin panel "AI Query Designer" for CRUD management of plain-English → SQL training examples.
-- Migrated prompt examples from hardcoded backend content into DB-driven examples for Telegram/AI generation.
-- Added `/api/ai-examples` CRUD and `/api/ai-examples/generate` + `/api/ai-examples/test` endpoints.
+- Added `query_examples` persistence table and prompt example storage.
+- Implemented Admin panel "Query Designer" for CRUD management of plain-English → SQL training examples.
+- Migrated prompt examples from hardcoded backend content into DB-driven examples for Telegram generation.
+- Added `/api/query-examples` CRUD and `/api/query-examples/generate` + `/api/query-examples/test` endpoints.
 - Added schema browser, live SQL test runner, and placeholder-aware date support in the Admin UI.
 - Improved Admin UI button visibility and added a loading spinner during SQL generation.
-- Added backend fallback generation path when AI returns empty SQL, with expanded prompt handling.
+- Added backend fallback generation path when SQL generation returns empty output, with expanded prompt handling.
 - Note: SQL generation may still fail for some prompts; investigation and debugging are paused until the next session.
 
 ---
