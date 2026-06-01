@@ -9,6 +9,7 @@
 
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import { showConfirm } from './dialogService';
 
 const ModalWrapper = ({ title, onClose, children }) => (
   <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0, 0, 0, 0.75)', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', boxSizing: 'border-box' }}>
@@ -31,7 +32,10 @@ const Investments = () => {
   
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isLogModalOpen, setIsLogModalOpen] = useState(false);
+  const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
   const [selectedInvestmentId, setSelectedInvestmentId] = useState('');
+  const [selectedInvestment, setSelectedInvestment] = useState(null);
+  const [investmentHistory, setInvestmentHistory] = useState([]);
 
   const [name, setName] = useState('');
   const [type, setType] = useState('Stock');
@@ -93,8 +97,19 @@ const Investments = () => {
     } catch (err) { alert("Failed to log update."); }
   };
 
+  const openHistoryModal = async (inv) => {
+    try {
+      const response = await axios.get(`${API_URL}/investments/${inv.id}/logs`);
+      setSelectedInvestment(inv);
+      setInvestmentHistory(response.data || []);
+      setIsHistoryModalOpen(true);
+    } catch (err) {
+      alert('Failed to load investment history.');
+    }
+  };
+
   const handleDelete = async (id) => {
-    if (!window.confirm("Permanently delete this investment profile?")) return;
+    if (!(await showConfirm("Permanently delete this investment profile?", { title: 'Delete Investment Asset' }))) return;
     try { await axios.delete(`${API_URL}/investments/${id}`); fetchData(); } 
     catch (err) { alert("Cannot delete asset."); }
   };
@@ -139,7 +154,7 @@ const Investments = () => {
                   <button onClick={() => handleDelete(inv.id)} style={{ background: 'transparent', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: '16px' }}>🗑️</button>
                 </div>
 
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '24px', padding: '16px', background: 'rgba(150,150,150,0.05)', borderRadius: '12px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '14px', padding: '16px', background: 'rgba(150,150,150,0.05)', borderRadius: '12px' }}>
                   <div>
                     <p className="text-muted" style={{ margin: '0 0 4px 0', fontSize: '11px', textTransform: 'uppercase' }}>Current Value</p>
                     <strong style={{ fontSize: '1.25rem' }}>C${bal.toLocaleString('en-US', {minimumFractionDigits: 2})}</strong>
@@ -150,7 +165,14 @@ const Investments = () => {
                   </div>
                 </div>
 
-                <button onClick={() => openLogModal(inv)} className="glass-button" style={{ width: '100%', padding: '12px', fontWeight: 'bold' }}>Update Value</button>
+                <p className="text-muted" style={{ margin: '0 0 16px 0', fontSize: '12px' }}>
+                  Last updated: {inv.last_log_date ? new Date(inv.last_log_date).toLocaleDateString('en-CA') : 'No logs yet'}
+                </p>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                  <button onClick={() => openLogModal(inv)} className="glass-button" style={{ width: '100%', padding: '12px', fontWeight: 'bold' }}>Update Value</button>
+                  <button onClick={() => openHistoryModal(inv)} className="glass-button" style={{ width: '100%', padding: '12px', fontWeight: 'bold', background: 'rgba(6, 182, 212, 0.1)', border: '1px solid rgba(6, 182, 212, 0.2)', color: '#22d3ee' }}>Log Keeper</button>
+                </div>
               </div>
             );
           })
@@ -236,6 +258,46 @@ const Investments = () => {
             </div>
             <button type="submit" className="glass-button" style={{ width: '100%', padding: '14px', marginTop: '10px', fontWeight: 'bold', boxSizing: 'border-box' }}>Save Performance Log</button>
           </form>
+        </ModalWrapper>
+      )}
+
+      {isHistoryModalOpen && (
+        <ModalWrapper title={`Log Keeper${selectedInvestment ? ` - ${selectedInvestment.name}` : ''}`} onClose={() => setIsHistoryModalOpen(false)}>
+          {investmentHistory.length === 0 ? (
+            <div className="glass-card" style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)' }}>
+              No historical logs found for this investment.
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              {investmentHistory.map((log, index) => {
+                const previous = investmentHistory[index + 1];
+                const delta = previous ? (parseFloat(log.balance) - parseFloat(previous.balance)) : 0;
+                const isUp = delta >= 0;
+                return (
+                  <div key={log.id} className="glass-card" style={{ padding: '14px 16px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                      <strong style={{ fontSize: '14px' }}>{new Date(log.date).toLocaleDateString('en-CA')}</strong>
+                      <span style={{ fontSize: '12px', color: isUp ? '#10b981' : '#ef4444', fontWeight: 700 }}>
+                        {index === investmentHistory.length - 1 ? 'Initial Entry' : `${isUp ? '+' : ''}C$${delta.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                      </span>
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                      <div>
+                        <p className="text-muted" style={{ margin: '0 0 4px 0', fontSize: '11px', textTransform: 'uppercase' }}>Portfolio Value</p>
+                        <strong>C${parseFloat(log.balance).toLocaleString('en-US', { minimumFractionDigits: 2 })}</strong>
+                      </div>
+                      <div>
+                        <p className="text-muted" style={{ margin: '0 0 4px 0', fontSize: '11px', textTransform: 'uppercase' }}>Contribution</p>
+                        <strong style={{ color: parseFloat(log.net_contribution || 0) >= 0 ? '#10b981' : '#ef4444' }}>
+                          {parseFloat(log.net_contribution || 0) >= 0 ? '+' : ''}C${parseFloat(log.net_contribution || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                        </strong>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </ModalWrapper>
       )}
     </div>

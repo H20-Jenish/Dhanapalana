@@ -19,6 +19,7 @@
 
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import { showConfirm } from './dialogService';
 
 const ModalWrapper = ({ title, onClose, children }) => (
   <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0, 0, 0, 0.75)', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
@@ -84,7 +85,7 @@ const Lending = () => {
   };
 
   const handleDelete = async (id) => {
-    if (!window.confirm("Delete this loan record? Funds will be returned to the source account.")) return;
+    if (!(await showConfirm("Delete this loan record? Funds will be returned to the source account.", { title: 'Delete Loan Record' }))) return;
     try { await axios.delete(`${API_URL}/lending/${id}`); fetchData(); } 
     catch (err) { alert("Error deleting record."); }
   };

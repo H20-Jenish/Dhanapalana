@@ -53,6 +53,7 @@
 
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import { showConfirm } from './dialogService';
 
 /**
  * MODALWRAPPER COMPONENT
@@ -130,7 +131,7 @@ const Savings = () => {
   };
 
   const handleDelete = async (id) => {
-    if (!window.confirm("Permanently remove this bank account?")) return;
+    if (!(await showConfirm("Permanently remove this bank account?", { title: 'Delete Bank Account' }))) return;
     try { await axios.delete(`${API_URL}/savings/${id}`, getAuthHeaders()); fetchData(); } 
     catch (err) { alert("Cannot delete: Account has linked transactions."); }
   };

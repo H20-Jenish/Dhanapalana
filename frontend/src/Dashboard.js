@@ -32,7 +32,7 @@
 
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { PieChart, Pie, Cell, Tooltip as PieTooltip, Legend, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as BarTooltip } from 'recharts';
+import { PieChart, Pie, Cell, Tooltip as PieTooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as BarTooltip } from 'recharts';
 
 /**
  * PIE CHART COLOR PALETTE
@@ -44,6 +44,10 @@ const PIE_COLORS = [
   '#F1C40F', '#E74C3C', '#1ABC9C', '#34495E', '#8E44AD',
   '#16A085', '#27AE60', '#2980B9', '#8E44AD', '#F39C12'
 ];
+
+const DASHBOARD_CARD_HEIGHT = '460px';
+const DASHBOARD_CARD_PADDING = '28px';
+const SUMMARY_CARD_MIN_HEIGHT = '176px';
 
 /**
  * STATIC BAR CHART COMPONENT
@@ -61,8 +65,8 @@ const StaticBarChart = ({ title, chartData, colorHex }) => {
     <div className="glass-card" style={{ 
       display: 'flex', 
       flexDirection: 'column', 
-      height: '420px', 
-      padding: '24px', 
+      height: DASHBOARD_CARD_HEIGHT,
+      padding: DASHBOARD_CARD_PADDING,
       boxSizing: 'border-box',
       gridColumn: isWide ? 'span 2' : 'auto' 
     }}>
@@ -156,7 +160,7 @@ const Dashboard = () => {
   const renderLedger = (title, items, isExpenseType, colorVar) => {
     if (!items || items.length === 0) return null;
     return (
-      <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', padding: '24px' }}>
+      <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', padding: DASHBOARD_CARD_PADDING }}>
         <h3 style={{ margin: '0 0 20px 0', fontWeight: 600 }}>{title}</h3>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
           {items.map((act, i) => (
@@ -186,13 +190,13 @@ const Dashboard = () => {
       
       {/* TOP SUMMARY CARDS */}
       <div className="dashboard-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '24px', marginBottom: '32px' }}>
-        <div className="glass-card" style={{ height: 'max-content', padding: '24px' }}>
+        <div className="glass-card" style={{ minHeight: SUMMARY_CARD_MIN_HEIGHT, height: 'max-content', padding: DASHBOARD_CARD_PADDING }}>
           <h4 style={{ color: 'var(--text-muted)', margin: '0 0 12px 0', fontSize: '14px', textTransform: 'uppercase' }}>Net Worth</h4>
           <h2 className="gradient-text" style={{ margin: 0, fontSize: '2.5rem', fontWeight: 800 }}>C${data.netWorth.toLocaleString('en-US', { minimumFractionDigits: 2 })}</h2>
           <div style={{ marginTop: '12px', fontSize: '13px', color: 'var(--text-muted)' }}>Includes <strong style={{ color: 'var(--accent-blue)' }}>C${data.totalInvestments.toLocaleString('en-US', { minimumFractionDigits: 2 })}</strong> in Investments</div>
         </div>
 
-        <div className="glass-card" onClick={() => setShowIncomeMonths(!showIncomeMonths)} style={{ borderTop: `4px solid ${totalIncomeColor}`, cursor: 'pointer', height: 'max-content', padding: '24px' }}>
+        <div className="glass-card" onClick={() => setShowIncomeMonths(!showIncomeMonths)} style={{ borderTop: `4px solid ${totalIncomeColor}`, cursor: 'pointer', minHeight: SUMMARY_CARD_MIN_HEIGHT, height: 'max-content', padding: DASHBOARD_CARD_PADDING }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
              <h4 style={{ color: 'var(--text-muted)', margin: '0 0 12px 0', fontSize: '14px', textTransform: 'uppercase' }}>Total Inflow {showIncomeMonths ? '▲' : '▼'}</h4>
           </div>
@@ -214,7 +218,7 @@ const Dashboard = () => {
           )}
         </div>
 
-        <div className="glass-card" onClick={() => setShowExpenseMonths(!showExpenseMonths)} style={{ borderTop: `4px solid ${totalExpenseColor}`, cursor: 'pointer', height: 'max-content', padding: '24px' }}>
+        <div className="glass-card" onClick={() => setShowExpenseMonths(!showExpenseMonths)} style={{ borderTop: `4px solid ${totalExpenseColor}`, cursor: 'pointer', minHeight: SUMMARY_CARD_MIN_HEIGHT, height: 'max-content', padding: DASHBOARD_CARD_PADDING }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
              <h4 style={{ color: 'var(--text-muted)', margin: '0 0 12px 0', fontSize: '14px', textTransform: 'uppercase' }}>Total Expenses {showExpenseMonths ? '▲' : '▼'}</h4>
           </div>
@@ -236,7 +240,7 @@ const Dashboard = () => {
           )}
         </div>
 
-        <div className="glass-card" style={{ borderTop: '4px solid var(--danger)', height: 'max-content', padding: '24px' }}>
+        <div className="glass-card" style={{ borderTop: '4px solid var(--danger)', minHeight: SUMMARY_CARD_MIN_HEIGHT, height: 'max-content', padding: DASHBOARD_CARD_PADDING }}>
           <h4 style={{ color: 'var(--text-muted)', margin: '0 0 12px 0', fontSize: '14px', textTransform: 'uppercase' }}>Credit Debt</h4>
           <h2 style={{ margin: 0, fontSize: '2rem', fontWeight: 700 }}>C${data.totalCreditDebt.toLocaleString('en-US', { minimumFractionDigits: 2 })}</h2>
           <div style={{ marginTop: '12px', fontSize: '13px', color: 'var(--text-muted)' }}>Utilization: <strong style={{ color: data.creditUtilization > 30 ? 'var(--danger)' : 'var(--success)' }}>{data.creditUtilization.toFixed(1)}%</strong></div>
@@ -249,24 +253,47 @@ const Dashboard = () => {
         <StaticBarChart title="Savings Accounts" chartData={savingsData} colorHex="var(--success)" />
         
         {pieData.length > 0 && (
-          <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', height: '420px', gridColumn: 'span 2', padding: '24px' }}>
+          <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', height: DASHBOARD_CARD_HEIGHT, gridColumn: 'span 2', padding: DASHBOARD_CARD_PADDING }}>
             <h3 style={{ margin: '0 0 10px 0', fontWeight: 600, fontSize: '15px', color: 'var(--text-muted)' }}>Expense Distribution</h3>
-            <div style={{ flex: 1, minHeight: 0 }}>
+            <div style={{ flex: '0 0 66%', minHeight: 0 }}>
               <ResponsiveContainer width="100%" height="100%">
-                <PieChart>                  
-                  <Pie data={pieData} dataKey="value" nameKey="name" cx="40%" cy="50%" innerRadius={80} outerRadius={130} paddingAngle={3} stroke="none">
+                <PieChart margin={{ top: 8, right: 8, bottom: 8, left: 8 }}>
+                  <Pie data={pieData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={72} outerRadius={112} paddingAngle={3} stroke="none">
                     {pieData.map((entry, index) => <Cell key={`cell-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />)}
                   </Pie>
                   <PieTooltip formatter={(value) => `C$${value.toFixed(2)}`} contentStyle={{ background: 'var(--bg-base)', border: '1px solid var(--border-glass)', borderRadius: '8px', color: 'var(--text-main)' }} />
-                  <Legend 
-                    layout="vertical" 
-                    verticalAlign="middle" 
-                    align="right" 
-                    iconType="circle" 
-                    wrapperStyle={{ fontSize: '13px', color: 'var(--text-main)', right: '12%', lineHeight: '28px' }} 
-                  />
                 </PieChart>
               </ResponsiveContainer>
+            </div>
+            <div style={{
+              flex: '1 1 auto',
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+              gap: '9px 16px',
+              alignContent: 'start',
+              padding: '12px 8px 16px',
+            }}>
+              {pieData.map((entry, index) => (
+                <div key={`legend-item-${index}`} style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+                  <span style={{
+                    width: '10px',
+                    height: '10px',
+                    borderRadius: '50%',
+                    background: PIE_COLORS[index % PIE_COLORS.length],
+                    flex: '0 0 10px',
+                  }} />
+                  <span style={{
+                    color: 'var(--text-main)',
+                    fontSize: '12px',
+                    lineHeight: '1.2',
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  }} title={entry.name}>
+                    {entry.name}
+                  </span>
+                </div>
+              ))}
             </div>
           </div>
         )}
@@ -276,7 +303,7 @@ const Dashboard = () => {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '24px', marginBottom: '32px' }}>
         <StaticBarChart title="Credit Debt" chartData={creditData} colorHex="var(--danger)" />
 
-        <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', height: '420px', padding: '24px' }}>
+        <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', height: DASHBOARD_CARD_HEIGHT, padding: DASHBOARD_CARD_PADDING }}>
           <h3 style={{ margin: '0 0 20px 0', fontWeight: 600, fontSize: '15px', color: 'var(--text-muted)' }}>Capital Movement</h3>
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: '24px' }}>
             <div style={{ background: 'var(--bg-base)', padding: '24px', borderRadius: '12px', textAlign: 'center', border: '1px solid var(--border-glass)' }}>

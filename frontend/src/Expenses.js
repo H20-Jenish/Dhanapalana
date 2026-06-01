@@ -55,6 +55,19 @@
 
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import { showConfirm } from './dialogService';
+
+const getAccountTextColor = (label) => {
+  const palette = ['#93c5fd', '#6ee7b7', '#fcd34d', '#c4b5fd', '#f9a8d4', '#67e8f9', '#bef264', '#fda4af'];
+  const key = String(label || '');
+  let hash = 0;
+  for (let i = 0; i < key.length; i += 1) {
+    hash = ((hash << 5) - hash) + key.charCodeAt(i);
+    hash |= 0;
+  }
+  if (key.startsWith('CC:')) return '#fda4af';
+  return palette[Math.abs(hash) % palette.length];
+};
 
 /**
  * MODALWRAPPER COMPONENT
@@ -84,6 +97,7 @@ const Expenses = () => {
   const [categories, setCategories] = useState([]);
   const [accounts, setAccounts] = useState([]);
   const [creditCards, setCreditCards] = useState([]);
+  const [searchTerm, setSearchTerm] = useState('');
   
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -141,6 +155,45 @@ const Expenses = () => {
     } catch (err) { console.error("Error fetching data"); }
   };
 
+  const normalize = (value) => String(value || '').trim().toLowerCase();
+
+  const expenseSuggestions = (() => {
+    const seen = new Set();
+    const push = (value, label = value) => {
+      const key = normalize(value);
+      if (!key || seen.has(key)) return null;
+      seen.add(key);
+      return { value, label };
+    };
+
+    const suggestions = [];
+    expenses.forEach((item) => {
+      suggestions.push(
+        push(item.category, `Category: ${item.category}`),
+        push(item.description, item.description ? `Description: ${item.description}` : ''),
+        push(item.bank_name ? `${item.bank_name}${item.account_type ? ` ${item.account_type}` : ''}` : '', item.bank_name ? `Account: ${item.bank_name}${item.account_type ? ` ${item.account_type}` : ''}` : ''),
+        push(item.credit_card_name ? `CC: ${item.credit_card_name}` : '', item.credit_card_name ? `Credit Card: ${item.credit_card_name}` : '')
+      );
+    });
+
+    categories.forEach((cat) => suggestions.push(push(cat.name, `Category: ${cat.name}`)));
+    accounts.forEach((acc) => suggestions.push(push(`${acc.bank_name}${acc.account_type ? ` ${acc.account_type}` : ''}`, `Account: ${acc.bank_name}${acc.account_type ? ` ${acc.account_type}` : ''}`)));
+    creditCards.forEach((cc) => suggestions.push(push(cc.name, `Credit Card: ${cc.name}`)));
+
+    return suggestions.filter(Boolean);
+  })();
+
+  const filteredExpenses = expenses.filter((item) => {
+    const q = normalize(searchTerm);
+    if (!q) return true;
+
+    const accountLabel = `${item.bank_name || ''} ${item.account_type || ''}`.trim();
+    const ccLabel = item.credit_card_name || '';
+    return [item.category, item.description, item.amount, item.date, accountLabel, ccLabel]
+      .filter(Boolean)
+      .some((field) => normalize(field).includes(q));
+  });
+
   const openModal = (item = null) => {
     if (item) {
       setEditingId(item.id); setAmount(item.amount); setCategoryId(item.category_id || '');
@@ -166,31 +219,74 @@ const Expenses = () => {
   };
 
   const handleDelete = async (id) => {
-    if (!window.confirm("Permanently delete this expense? Funds will be reverted.")) return;
+    if (!(await showConfirm("Permanently delete this expense? Funds will be reverted.", { title: 'Delete Expense Record' }))) return;
     try { await axios.delete(`${API_URL}/expenses/${id}`); fetchData(); } 
     catch (err) { alert("Error deleting record."); }
   };
 
   return (
     <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '32px', flexWrap: 'wrap', gap: '16px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.2fr) minmax(300px, 1fr) auto', alignItems: 'end', marginBottom: '32px', gap: '16px' }}>
         <div>
           <h1 style={{ fontSize: '2.5rem', marginBottom: '8px', fontWeight: 800, letterSpacing: '-0.5px' }}>Expense Ledger</h1>
           <p className="text-muted" style={{ margin: 0, fontSize: '15px' }}>Monitor your outbound cash flows and categorized spending.</p>
         </div>
-        <button onClick={() => openModal()} className="glass-button" style={{ padding: '12px 24px', fontWeight: 'bold', background: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.2)' }}>
-          - Log Expense
-        </button>
+        <div style={{ position: 'relative', minWidth: 0, alignSelf: 'stretch', display: 'flex', alignItems: 'end' }}>
+          <div style={{ width: '100%', position: 'relative' }}>
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="Search category, description, account, credit card..."
+              className="glass-input"
+              style={{ width: '100%', padding: '12px 14px' }}
+            />
+            {searchTerm.trim() && (
+              <div style={{ position: 'absolute', top: 'calc(100% + 8px)', left: 0, right: 0, zIndex: 20, background: 'rgba(10,10,10,0.98)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '14px', boxShadow: '0 16px 40px rgba(0,0,0,0.35)', padding: '10px', maxHeight: '320px', overflowY: 'auto' }}>
+                <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.7px', marginBottom: '8px' }}>Suggestions</div>
+                {expenseSuggestions.filter((item) => normalize(item.label).includes(normalize(searchTerm))).slice(0, 10).length > 0 ? (
+                  expenseSuggestions.filter((item) => normalize(item.label).includes(normalize(searchTerm))).slice(0, 10).map((item) => (
+                    <button
+                      key={item.label}
+                      type="button"
+                      onClick={() => setSearchTerm(item.value)}
+                      className="glass-button"
+                      style={{ width: '100%', justifyContent: 'flex-start', marginBottom: '6px', padding: '10px 12px', textAlign: 'left', background: 'rgba(255,255,255,0.03)' }}
+                    >
+                      {item.label}
+                    </button>
+                  ))
+                ) : (
+                  <div style={{ fontSize: '13px', color: 'var(--text-muted)', padding: '4px 2px' }}>No smart suggestions found.</div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', alignItems: 'center' }}>
+          {searchTerm && (
+            <button type="button" onClick={() => setSearchTerm('')} className="glass-button" style={{ padding: '12px 18px' }}>
+              Clear
+            </button>
+          )}
+          <button onClick={() => openModal()} className="glass-button" style={{ padding: '12px 24px', fontWeight: 'bold', background: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.2)' }}>
+            - Log Expense
+          </button>
+        </div>
       </div>
 
       <div className="glass-card" style={{ padding: '0', overflow: 'hidden' }}>
-        {expenses.length === 0 ? (
+        {filteredExpenses.length === 0 ? (
           <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>No expense records found.</div>
         ) : (
           <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-            {expenses.map((item, index) => {
-              const prev = expenses[index - 1];
+            {filteredExpenses.map((item, index) => {
+              const prev = filteredExpenses[index - 1];
               const isMonthStart = !prev || getMonthKey(item.date) !== getMonthKey(prev.date);
+              const paymentLabel = item.credit_card_name
+                ? `CC: ${item.credit_card_name}`
+                : (item.bank_name ? `${item.bank_name} (${item.account_type})` : 'Unallocated');
+              const paymentColor = getAccountTextColor(paymentLabel);
               return (
                 <React.Fragment key={item.id}>
                   {isMonthStart && (
@@ -205,7 +301,8 @@ const Expenses = () => {
                         <span style={{ fontSize: '10px', padding: '2px 8px', background: 'rgba(150,150,150,0.1)', borderRadius: '12px', fontWeight: 'bold', textTransform: 'uppercase' }}>{item.category}</span>
                       </strong>
                       <span className="text-muted" style={{ fontSize: '13px' }}>
-                        {item.date ? new Date(item.date).toLocaleDateString() : 'Unknown Date'} • Paid via: {item.credit_card_name ? `💳 ${item.credit_card_name}` : (item.bank_name ? `🏦 ${item.bank_name} (${item.account_type})` : 'Unallocated')}
+                        {item.date ? new Date(item.date).toLocaleDateString() : 'Unknown Date'} • Paid via:{' '}
+                        <span style={{ color: paymentColor, fontWeight: 700 }}>{paymentLabel}</span>
                       </span>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>

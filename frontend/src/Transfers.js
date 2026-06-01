@@ -7,8 +7,20 @@
  * repayment). It tracks transfer history and provides flexible payment routing.
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
+import { showConfirm } from './dialogService';
+
+const getBankTextColor = (label) => {
+  const palette = ['#93c5fd', '#67e8f9', '#c4b5fd', '#a5b4fc', '#fcd34d', '#fdba74', '#e9d5ff', '#bae6fd'];
+  const key = String(label || '');
+  let hash = 0;
+  for (let i = 0; i < key.length; i += 1) {
+    hash = ((hash << 5) - hash) + key.charCodeAt(i);
+    hash |= 0;
+  }
+  return palette[Math.abs(hash) % palette.length];
+};
 
 const ModalWrapper = ({ title, onClose, children }) => (
   <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0, 0, 0, 0.75)', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
@@ -28,6 +40,7 @@ const Transfers = () => {
   const [transfers, setTransfers] = useState([]);
   const [accounts, setAccounts] = useState([]);
   const [recipientBanks, setRecipientBanks] = useState([]);
+  const [searchTerm, setSearchTerm] = useState('');
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -41,6 +54,68 @@ const Transfers = () => {
   const [date, setDate] = useState('');
 
   const API_URL = '/api';
+
+  const accountLabelMap = useMemo(() => {
+    const map = new Map();
+    accounts.forEach((acc) => {
+      map.set(acc.id, `${acc.bank_name}${acc.account_type ? ` (${acc.account_type})` : ''}`);
+    });
+    return map;
+  }, [accounts]);
+
+  const normalize = (value) => String(value || '').trim().toLowerCase();
+
+  const transferSuggestions = useMemo(() => {
+    const seen = new Set();
+    const push = (value, label = value) => {
+      const key = normalize(value);
+      if (!key || seen.has(key)) return null;
+      seen.add(key);
+      return { value, label };
+    };
+
+    const suggestions = [];
+    transfers.forEach((t) => {
+      const sourceLabel = t.source_bank
+        ? `${t.source_bank}${t.source_account_type ? ` (${t.source_account_type})` : ''}`
+        : (accountLabelMap.get(t.source_account_id) || 'Cash / External');
+
+      suggestions.push(
+        push(t.recipient, `Recipient: ${t.recipient}`),
+        push(sourceLabel, `From: ${sourceLabel}`),
+        push(t.recipient_bank || '', t.recipient_bank ? `Bank: ${t.recipient_bank}` : ''),
+        push(t.method, `Method: ${t.method}`),
+        push(t.date ? new Date(t.date).toLocaleDateString() : '', t.date ? `Date: ${new Date(t.date).toLocaleDateString()}` : '')
+      );
+    });
+
+    recipientBanks.forEach((b) => suggestions.push(push(b.name, `Bank: ${b.name}`)));
+    accounts.forEach((acc) => suggestions.push(push(`${acc.bank_name}${acc.account_type ? ` (${acc.account_type})` : ''}`, `From: ${acc.bank_name}${acc.account_type ? ` (${acc.account_type})` : ''}`)));
+
+    return suggestions.filter(Boolean);
+  }, [transfers, recipientBanks, accounts, accountLabelMap]);
+
+  const filteredTransfers = useMemo(() => {
+    const q = normalize(searchTerm);
+    if (!q) return transfers;
+
+    return transfers.filter((t) => {
+      const sourceLabel = t.source_bank
+        ? `${t.source_bank}${t.source_account_type ? ` (${t.source_account_type})` : ''}`
+        : (accountLabelMap.get(t.source_account_id) || 'Cash / External');
+
+      return [
+        t.recipient,
+        t.recipient_bank,
+        t.method,
+        t.date,
+        t.amount,
+        sourceLabel,
+      ]
+        .filter(Boolean)
+        .some((field) => normalize(field).includes(q));
+    });
+  }, [transfers, searchTerm, accountLabelMap]);
 
   useEffect(() => { fetchData(); }, []);
 
@@ -75,36 +150,96 @@ const Transfers = () => {
   };
 
   const handleDelete = async (id) => {
-    if (!window.confirm("Delete this transfer? Funds will be returned to the source account.")) return;
+    if (!(await showConfirm("Delete this transfer? Funds will be returned to the source account.", { title: 'Delete Transfer' }))) return;
     try { await axios.delete(`${API_URL}/transfers/${id}`); fetchData(); } 
     catch (err) { alert("Error deleting transfer."); }
   };
 
   return (
     <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '32px', flexWrap: 'wrap', gap: '16px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.2fr) minmax(300px, 1fr) auto', alignItems: 'end', marginBottom: '32px', gap: '16px' }}>
         <div>
-          <h1 style={{ fontSize: '2.5rem', marginBottom: '8px', fontWeight: 800, letterSpacing: '-0.5px' }}>External Transfers</h1>
+          <h1 style={{ fontSize: '2.5rem', marginBottom: '8px', fontWeight: 800, letterSpacing: '-0.5px' }}>Internal/External Tranfers</h1>
           <p className="text-muted" style={{ margin: 0, fontSize: '15px' }}>Log outbound remittances and third-party fund routing.</p>
         </div>
-        <button onClick={() => openModal()} className="glass-button" style={{ padding: '12px 24px', fontWeight: 'bold', background: 'rgba(245, 158, 11, 0.1)', color: '#f59e0b', border: '1px solid rgba(245, 158, 11, 0.2)' }}>
-          + Send Funds
-        </button>
+        <div style={{ position: 'relative', minWidth: 0, alignSelf: 'stretch', display: 'flex', alignItems: 'end' }}>
+          <div style={{ width: '100%', position: 'relative' }}>
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="Search recipient, source account, bank, method..."
+              className="glass-input"
+              style={{ width: '100%', padding: '12px 14px' }}
+            />
+            {searchTerm.trim() && (
+              <div style={{ position: 'absolute', top: 'calc(100% + 8px)', left: 0, right: 0, zIndex: 20, background: 'rgba(10,10,10,0.98)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '14px', boxShadow: '0 16px 40px rgba(0,0,0,0.35)', padding: '10px', maxHeight: '320px', overflowY: 'auto' }}>
+                <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.7px', marginBottom: '8px' }}>Suggestions</div>
+                {transferSuggestions.filter((item) => normalize(item.label).includes(normalize(searchTerm))).slice(0, 10).length > 0 ? (
+                  transferSuggestions.filter((item) => normalize(item.label).includes(normalize(searchTerm))).slice(0, 10).map((item) => (
+                    <button
+                      key={item.label}
+                      type="button"
+                      onClick={() => setSearchTerm(item.value)}
+                      className="glass-button"
+                      style={{ width: '100%', justifyContent: 'flex-start', marginBottom: '6px', padding: '10px 12px', textAlign: 'left', background: 'rgba(255,255,255,0.03)' }}
+                    >
+                      {item.label}
+                    </button>
+                  ))
+                ) : (
+                  <div style={{ fontSize: '13px', color: 'var(--text-muted)', padding: '4px 2px' }}>No smart suggestions found.</div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: '12px', alignItems: 'center', justifyContent: 'flex-end' }}>
+          {searchTerm && (
+            <button type="button" onClick={() => setSearchTerm('')} className="glass-button" style={{ padding: '12px 18px' }}>
+              Clear
+            </button>
+          )}
+          <button onClick={() => openModal()} className="glass-button" style={{ padding: '12px 24px', fontWeight: 'bold', background: 'rgba(245, 158, 11, 0.1)', color: '#f59e0b', border: '1px solid rgba(245, 158, 11, 0.2)' }}>
+            + Send Funds
+          </button>
+        </div>
       </div>
 
       <div className="glass-card" style={{ padding: '0', overflow: 'hidden' }}>
-        {transfers.length === 0 ? (
+        {filteredTransfers.length === 0 ? (
           <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>No transfers found.</div>
         ) : (
           <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-            {transfers.map(t => (
+            {filteredTransfers.map(t => (
               <li key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '20px 24px', borderBottom: '1px solid rgba(150,150,150,0.1)', transition: 'background 0.2s' }} onMouseOver={e => e.currentTarget.style.background = 'rgba(150,150,150,0.03)'} onMouseOut={e => e.currentTarget.style.background = 'transparent'}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  {(() => {
+                    const sourceLabel = t.source_bank
+                      ? `${t.source_bank}${t.source_account_type ? ` (${t.source_account_type})` : ''}`
+                      : (accountLabelMap.get(t.source_account_id) || 'Cash / External');
+                    const shouldHideBankLine = t.method === 'Internal Transfer' || t.method === 'Credit Card Repayment';
+                    const recipientBankLabel = t.recipient_bank || 'Unspecified';
+                    const sourceColor = getBankTextColor(sourceLabel);
+                    const recipientBankColor = getBankTextColor(recipientBankLabel);
+
+                    return (
+                      <>
                   <strong style={{ fontSize: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
                     To: {t.recipient}
                     <span style={{ fontSize: '10px', padding: '2px 8px', background: 'rgba(150,150,150,0.1)', borderRadius: '12px', fontWeight: 'bold' }}>{t.method}</span>
                   </strong>
-                  <span className="text-muted" style={{ fontSize: '13px' }}>{t.date ? new Date(t.date).toLocaleDateString() : ''} • Bank: {t.recipient_bank || 'Unspecified'}</span>
+                  <span className="text-muted" style={{ fontSize: '13px' }}>
+                    {t.date ? new Date(t.date).toLocaleDateString() : ''} • From: <span style={{ color: sourceColor, fontWeight: 700 }}>{sourceLabel}</span>
+                  </span>
+                  {!shouldHideBankLine ? (
+                    <span className="text-muted" style={{ fontSize: '13px' }}>
+                      Bank: <span style={{ color: recipientBankColor, fontWeight: 700 }}>{recipientBankLabel}</span>
+                    </span>
+                  ) : null}
+                      </>
+                    );
+                  })()}
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
                   <div style={{ textAlign: 'right' }}>

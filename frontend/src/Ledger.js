@@ -22,6 +22,22 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
 
+const getAccountBadgeColor = (accountName) => {
+  const palettes = ['#93c5fd', '#6ee7b7', '#fcd34d', '#c4b5fd', '#f9a8d4', '#67e8f9', '#bef264', '#fda4af'];
+
+  const key = String(accountName || '');
+  let hash = 0;
+  for (let i = 0; i < key.length; i += 1) {
+    hash = ((hash << 5) - hash) + key.charCodeAt(i);
+    hash |= 0;
+  }
+
+  if (key.startsWith('CC:')) {
+    return '#fda4af';
+  }
+  return palettes[Math.abs(hash) % palettes.length];
+};
+
 const Ledger = () => {
   const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -30,6 +46,7 @@ const Ledger = () => {
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('All');
   const [accountFilter, setAccountFilter] = useState('');
+  const [categoryFilters, setCategoryFilters] = useState([]);
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [accountOptions, setAccountOptions] = useState([]);
@@ -40,6 +57,7 @@ const Ledger = () => {
     setSearch('');
     setTypeFilter('All');
     setAccountFilter('');
+    setCategoryFilters([]);
     setStartDate('');
     setEndDate('');
   };
@@ -113,12 +131,24 @@ const Ledger = () => {
       const lowerSearch = search.toLowerCase();
       const matchSearch = t.desc.toLowerCase().includes(lowerSearch) || t.category.toLowerCase().includes(lowerSearch);
       const matchAccount = accountFilter === '' || t.account.toLowerCase().includes(accountFilter.toLowerCase());
+      const matchCategory = categoryFilters.length === 0 || categoryFilters.includes(t.category);
       const txDate = t.date ? t.date.substring(0, 10) : '';
       const matchStart = startDate ? txDate >= startDate : true;
       const matchEnd = endDate ? txDate <= endDate : true;
-      return matchType && matchSearch && matchAccount && matchStart && matchEnd;
+      return matchType && matchSearch && matchAccount && matchCategory && matchStart && matchEnd;
     });
-  }, [transactions, search, typeFilter, accountFilter, startDate, endDate]);
+  }, [transactions, search, typeFilter, accountFilter, categoryFilters, startDate, endDate]);
+
+  const categoryOptions = useMemo(() => {
+    return [...new Set(transactions.map(t => t.category).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  }, [transactions]);
+
+  const isDateFiltered = Boolean(startDate || endDate);
+  const filteredTotal = useMemo(() => filteredData.reduce((sum, t) => sum + t.amount, 0), [filteredData]);
+
+  const toggleCategoryFilter = (category) => {
+    setCategoryFilters(prev => prev.includes(category) ? prev.filter(c => c !== category) : [...prev, category]);
+  };
 
   const formatSafeDate = (dateString) => {
     if (!dateString) return '';
@@ -146,11 +176,38 @@ const Ledger = () => {
 
   return (
     <div style={{ maxWidth: '1400px', margin: '0 auto' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '32px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto auto', alignItems: 'end', gap: '16px', marginBottom: '32px' }}>
         <div>
           <h1 style={{ fontSize: '2.5rem', margin: '0 0 8px 0', fontWeight: 800 }}>Master Ledger</h1>
           <p style={{ color: 'var(--text-muted)', margin: 0 }}>View, filter, and export all financial movements including soft deletes.</p>
         </div>
+        {isDateFiltered ? (
+          <div className="glass-card" style={{ margin: 0, minWidth: '320px', padding: '14px 16px' }}>
+            <div style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.7px', color: 'var(--text-muted)', marginBottom: '10px' }}>Filtered Summary</div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', fontSize: '13px', marginBottom: '6px' }}>
+              <span style={{ color: 'var(--text-muted)' }}>From</span>
+              <strong>{startDate || 'Any'}</strong>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', fontSize: '13px', marginBottom: categoryFilters.length === 1 ? '6px' : '12px' }}>
+              <span style={{ color: 'var(--text-muted)' }}>To</span>
+              <strong>{endDate || 'Any'}</strong>
+            </div>
+            {categoryFilters.length === 1 ? (
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', fontSize: '13px', marginBottom: '12px' }}>
+                <span style={{ color: 'var(--text-muted)' }}>Category</span>
+                <strong>{categoryFilters[0]}</strong>
+              </div>
+            ) : null}
+            <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.6px' }}>Total Sum</span>
+              <strong style={{ fontSize: '1rem', color: filteredTotal >= 0 ? 'var(--success)' : 'var(--danger)' }}>
+                {filteredTotal >= 0 ? '+' : ''}{filteredTotal.toFixed(2)}
+              </strong>
+            </div>
+          </div>
+        ) : (
+          <div />
+        )}
         <button onClick={handleExportCSV} className="glass-button glass-button-outline" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           ⬇ Export CSV
         </button>
@@ -180,6 +237,26 @@ const Ledger = () => {
         <button onClick={clearFilters} className="glass-button glass-button-outline" style={{ flex: '0 0 auto', whiteSpace: 'nowrap' }} title="Clear all filters">
           ✕ Clear Filters
         </button>
+        <div style={{ flexBasis: '100%', display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '4px' }}>
+          {categoryOptions.map(cat => (
+            <button
+              key={cat}
+              type="button"
+              onClick={() => toggleCategoryFilter(cat)}
+              className="glass-button"
+              style={{
+                padding: '7px 12px',
+                borderRadius: '999px',
+                fontSize: '12px',
+                background: categoryFilters.includes(cat) ? 'rgba(6,182,212,0.16)' : 'rgba(255,255,255,0.03)',
+                border: categoryFilters.includes(cat) ? '1px solid rgba(34,211,238,0.35)' : '1px solid rgba(255,255,255,0.08)',
+                color: categoryFilters.includes(cat) ? 'var(--accent-cyan)' : 'var(--text-main)',
+              }}
+            >
+              {cat}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="glass-card" style={{ padding: 0, overflow: 'hidden' }}>
@@ -206,6 +283,7 @@ const Ledger = () => {
                 const displayAmount = t.type === 'Internal Transfer' ? `${Math.abs(t.amount).toFixed(2)}` : (t.amount > 0 ? `+${t.amount.toFixed(2)}` : t.amount.toFixed(2));
                 let amountColor = t.amount > 0 ? 'var(--success)' : 'var(--danger)';
                 if (['Transfer', 'Credit Repayment', 'Internal Transfer', 'Investment'].includes(t.type)) amountColor = 'var(--text-main)';
+                const accountColor = getAccountBadgeColor(t.account);
 
                 return (
                   <tr key={t.id} style={{ opacity: isDeleted ? 0.4 : 1, textDecoration: isDeleted ? 'line-through' : 'none' }}>
@@ -221,7 +299,9 @@ const Ledger = () => {
                       {isDeleted && <span style={{ marginLeft: '12px', padding: '2px 6px', fontSize: '10px', background: 'var(--danger)', color: '#fff', borderRadius: '4px', fontWeight: 'bold', textDecoration: 'none' }}>DELETED</span>}
                     </td>
                     <td style={{ color: 'var(--text-muted)' }}>{t.category}</td>
-                    <td style={{ color: 'var(--text-muted)' }}>{t.account}</td>
+                    <td>
+                      <span style={{ fontSize: '13px', fontWeight: 700, color: accountColor }}>{t.account}</span>
+                    </td>
                     <td style={{ fontWeight: 'bold', color: amountColor }}>{displayAmount}</td>
                   </tr>
                 )

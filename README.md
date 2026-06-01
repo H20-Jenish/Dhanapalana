@@ -11,12 +11,16 @@ Dhanapalana is a full-stack web application designed to help individuals track, 
 - **📈 Comprehensive Financial Tracking**: Log and categorize income, expenses, savings accounts, credit cards, investments, transfers, and lending
 - **🤖 AI-Powered Insights**: Vittaparāmarśadātā AI assistant generates monthly financial analysis, recommendations, and answers conversational Telegram queries with full context memory
 - **📊 Automated Reporting**: Monthly reports with charts, trends, and year-over-year comparisons
+- **📥 Downloadable Monthly Packs**: One-click monthly summary export with summary, income, expenses, bank balances, credit usage, investment changes, transfers, and lending details
 - **📌 Accurate Monthly Category Reports**: Expense categories only show actual spend for that month, with previous-month comparison for active categories
 - **🔐 Secure Authentication**: JWT-based auth with multi-factor authentication (MFA) support
 - **🔔 Real-time Notifications**: System alerts and financial activity notifications
 - **💾 Automated Backups**: Scheduled database backups with restore capabilities
 - **📱 Telegram Integration**: Remote financial queries via Telegram bot
-- **🎨 Responsive Design**: Modern glassmorphism UI with dark/light theme support
+- **🔔 Investment Reminder Engine**: Per-asset reminder cadence (daily/weekly/biweekly/monthly/custom days) with Telegram delivery
+- **🧾 Investment Log Keeper**: Per-investment historical value/contribution log with gain/loss tracking
+- **🪟 Consistent Modal UX**: Native browser popups replaced by in-app modal dialogs for confirm/prompt/alert flows
+- **🎨 Responsive Design**: Modern glassmorphism UI optimized for desktop and mobile
 - **📈 Data Visualization**: Interactive charts and graphs using Recharts
 - **📝 Audit Logging**: Complete system activity tracking for security and compliance
 
@@ -90,8 +94,9 @@ Dhanapalana is a full-stack web application designed to help individuals track, 
    ```
 
 5. **🌐 Access the application:**
-   - Frontend: `http://localhost:3000`
-   - Backend API: `http://localhost:5000`
+   - App (recommended): `https://localhost`
+   - API base via Nginx: `https://localhost/api`
+   - Direct container ports for backend/frontend are not published by default in this compose setup
 
 6. **🔧 Stop the application:**
    ```bash
@@ -133,7 +138,15 @@ If you want to run the frontend and backend separately for development:
 
 ### 📊 Reports & Analytics
 - `GET /api/reports/monthly` - Monthly financial reports
+- `GET /api/reports/monthly/:month/download` - Full monthly downloadable payload (YYYY-MM)
 - `POST /api/reports/analyze/:month` - Generate AI analysis
+
+### 📈 Investments & Reminders
+- `GET /api/investments/:id/logs` - Investment log history for an asset
+- `GET /api/investment-reminders` - List per-asset reminder settings
+- `POST /api/investment-reminders` - Create or update per-asset reminder settings
+- `GET /api/system-settings/investment-reminders` - Read global reminder send time and timezone
+- `POST /api/system-settings/investment-reminders` - Update global reminder send time and timezone
 
 ### ⚙️ System Management (Admin)
 - `GET /api/users` - List users
@@ -162,6 +175,7 @@ docker-compose up --build -d
 - `TELEGRAM_BOT_TOKEN`: Telegram bot token (optional)
 - `NGROK_TOKEN`: Ngrok authentication token (optional)
 - `CORS_ALLOWED_ORIGINS`: Comma-separated list of extra allowed CORS origins (optional, e.g. `https://myapp.example.com`)
+- `APP_TIMEZONE`: Global container timezone for frontend/backend/db/nginx and reminder defaults (optional, default `America/Toronto`)
 
 ## 🛡️ Security Features
 
@@ -240,6 +254,14 @@ For support and questions:
 ### 2026-05-16
 - Fixed monthly report category logic so only categories with actual spend in the selected month are shown.
 - Updated monthly report comparison logic to compare active categories against the previous month without displaying zero-spend categories.
+
+### 2026-05-31
+- Standardized timezone handling across all containers through `APP_TIMEZONE` mapped to `TZ`.
+- Installed timezone data in backend and frontend images to ensure correct local time behavior.
+- Added full monthly summary download API (`/api/reports/monthly/:month/download`).
+- Added per-card "Download Summary" action in Monthly Reports UI to export detailed month data.
+- Added investment log keeper support and reminder scheduling enhancements (time + timezone + per-asset cadence).
+- Replaced remaining native popup behavior with in-app modal dialog flows.
 
 ### 2026-05-02 (In-progress updates)
 - Added `ai_query_examples` persistence table and AI prompt examples storage.

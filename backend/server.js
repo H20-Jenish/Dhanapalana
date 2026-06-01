@@ -29,45 +29,7 @@ const Docker = require('dockerode');
 
 const docker = new Docker({ socketPath: '/var/run/docker.sock' });
 
-const { generateText } = require('ai');
-const { createOllama } = require('ollama-ai-provider-v2');
-
-const ollama = createOllama({
-  baseURL: 'http://ollama:11434/api',
-});
-
 let JWT_SECRET = process.env.JWT_SECRET || ''; 
-
-// ==========================================
-// TELEGRAM CONVERSATION HISTORY
-// Per-chatId message store so the AI can
-// answer follow-up questions in context.
-// ==========================================
-const conversationHistories = new Map();
-const HISTORY_MAX_EXCHANGES = 10;     // keep last 10 back-and-forth turns
-const HISTORY_TIMEOUT_MS = 30 * 60 * 1000; // reset after 30 min of inactivity
-
-const getConversationHistory = (chatId) => {
-  const now = Date.now();
-  const entry = conversationHistories.get(chatId);
-  if (!entry || (now - entry.lastActivity) > HISTORY_TIMEOUT_MS) {
-    const fresh = { messages: [], lastActivity: now };
-    conversationHistories.set(chatId, fresh);
-    return fresh;
-  }
-  entry.lastActivity = now;
-  return entry;
-};
-
-const appendToConversation = (chatId, userMsg, assistantMsg) => {
-  const entry = getConversationHistory(chatId);
-  entry.messages.push({ role: 'user', content: userMsg });
-  entry.messages.push({ role: 'assistant', content: assistantMsg });
-  // Trim to the most recent HISTORY_MAX_EXCHANGES exchanges
-  if (entry.messages.length > HISTORY_MAX_EXCHANGES * 2) {
-    entry.messages = entry.messages.slice(-(HISTORY_MAX_EXCHANGES * 2));
-  }
-};
 
 const app = express();
 
@@ -164,25 +126,7 @@ const initJwtSecret = async () => {
   }
 };
 
-const initializeTunnel = async (ngrokToken, telegramToken) => {
-  try {
-    logger.info('Starting Ngrok tunnel...');
-    const listener = await ngrok.forward({ addr: 5000, authtoken: ngrokToken });
-    const publicUrl = listener.url();
-    logger.info(`✅ Ngrok tunnel established at: ${publicUrl}`);
-    
-    if (telegramToken) {
-      const tb = await axios.post(`https://api.telegram.org/bot${telegramToken}/setWebhook`, { 
-        url: `${publicUrl}/api/telegram/webhook`, 
-        drop_pending_updates: true 
-      });
-      logger.info(`✅ Telegram Webhook linked: ${tb.data.description}`);
-    }
-    return publicUrl;
-  } catch (err) {
-    logger.error(`❌ Ngrok Tunnel Error: ${err.message}`);
-  }
-};
+const initializeTunnel = async () => null;
 
 const runMigrations = async () => {
   let retries = 5;
@@ -190,7 +134,7 @@ const runMigrations = async () => {
     try {
       await pool.query(`
         CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, username TEXT UNIQUE NOT NULL, password TEXT NOT NULL, role TEXT NOT NULL, mfa_secret TEXT, mfa_enabled BOOLEAN DEFAULT FALSE, reset_otp TEXT, reset_otp_expires TIMESTAMP);
-        CREATE TABLE IF NOT EXISTS categories (id SERIAL PRIMARY KEY, name TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS categories (id SERIAL PRIMARY KEY, name TEXT NOT NULL, sort_order INTEGER);
         CREATE TABLE IF NOT EXISTS banks (id SERIAL PRIMARY KEY, name TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS recipient_banks (id SERIAL PRIMARY KEY, name TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS account_types (id SERIAL PRIMARY KEY, name TEXT NOT NULL);
@@ -202,11 +146,11 @@ const runMigrations = async () => {
         CREATE TABLE IF NOT EXISTS lending (id SERIAL PRIMARY KEY, source_account_id INTEGER REFERENCES savings_accounts(id), recipient TEXT, recipient_bank_id INTEGER REFERENCES recipient_banks(id), amount DECIMAL(15,2), repaid DECIMAL(15,2) DEFAULT 0, method TEXT, date DATE, status TEXT DEFAULT 'ACTIVE');
         CREATE TABLE IF NOT EXISTS investments (id SERIAL PRIMARY KEY, name TEXT NOT NULL, bank_id INTEGER REFERENCES banks(id), type TEXT NOT NULL, status TEXT DEFAULT 'ACTIVE');
         CREATE TABLE IF NOT EXISTS investment_logs (id SERIAL PRIMARY KEY, investment_id INTEGER REFERENCES investments(id), date DATE NOT NULL, balance DECIMAL(15,2) NOT NULL, net_contribution DECIMAL(15,2) DEFAULT 0.00, status TEXT DEFAULT 'ACTIVE');
+        CREATE TABLE IF NOT EXISTS investment_reminder_settings (id SERIAL PRIMARY KEY, investment_id INTEGER UNIQUE REFERENCES investments(id) ON DELETE CASCADE, is_enabled BOOLEAN DEFAULT FALSE, frequency_days INTEGER DEFAULT 30, last_sent_on DATE, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS notifications (id SERIAL PRIMARY KEY, message TEXT NOT NULL, is_read BOOLEAN DEFAULT FALSE, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS audit_logs (id SERIAL PRIMARY KEY, action_details TEXT NOT NULL, timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS system_settings (key TEXT PRIMARY KEY, value TEXT);
         CREATE TABLE IF NOT EXISTS password_history (id SERIAL PRIMARY KEY, user_id INTEGER REFERENCES users(id) ON DELETE CASCADE, password_hash TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
-        CREATE TABLE IF NOT EXISTS ai_monthly_insights (month TEXT PRIMARY KEY, insights TEXT, generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS system_backups (id SERIAL PRIMARY KEY, version TEXT UNIQUE NOT NULL, filename TEXT NOT NULL, notes TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
       `);
       
@@ -215,59 +159,22 @@ const runMigrations = async () => {
       await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_otp TEXT;`);
       await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_otp_expires TIMESTAMP;`);
       await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`);
+      await pool.query(`ALTER TABLE categories ADD COLUMN IF NOT EXISTS sort_order INTEGER;`);
       await pool.query(`ALTER TABLE investments ADD COLUMN IF NOT EXISTS account_type_id INTEGER REFERENCES account_types(id);`);
-      await pool.query(`CREATE TABLE IF NOT EXISTS ai_query_examples (id SERIAL PRIMARY KEY, question TEXT NOT NULL, sql_query TEXT NOT NULL, description TEXT DEFAULT '', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`);
-      
+      await pool.query(`ALTER TABLE investment_reminder_settings ADD COLUMN IF NOT EXISTS is_enabled BOOLEAN DEFAULT FALSE;`);
+      await pool.query(`ALTER TABLE investment_reminder_settings ADD COLUMN IF NOT EXISTS frequency_days INTEGER DEFAULT 30;`);
+      await pool.query(`ALTER TABLE investment_reminder_settings ADD COLUMN IF NOT EXISTS last_sent_on DATE;`);
+      await pool.query(`ALTER TABLE investment_reminder_settings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`);
       await pool.query(`UPDATE users SET role = 'admin' WHERE id = (SELECT MIN(id) FROM users)`);
       
       const catCount = await pool.query('SELECT COUNT(*) FROM categories');
       if (parseInt(catCount.rows[0].count) === 0) {
         await pool.query(`INSERT INTO categories (name) VALUES ('Rent'), ('Utility'), ('Installment'), ('Insurance'), ('Mobile Bill'), ('Gas'), ('Grocery'), ('Food'), ('Shopping'), ('Charging'), ('Personal Care'), ('Household'), ('Misc')`);
       }
+      await pool.query(`UPDATE categories SET sort_order = COALESCE(sort_order, id)`);
       const accCount = await pool.query('SELECT COUNT(*) FROM account_types');
       if (parseInt(accCount.rows[0].count) === 0) { 
         await pool.query(`INSERT INTO account_types (name) VALUES ('Savings'), ('Checking'), ('Investment')`); 
-      }
-
-      // Seed AI query examples if none exist yet.
-      // SQL values use date placeholders: {TODAY} {THIS_MONTH_START} {LAST_MONTH_START}
-      // {LAST_MONTH_END} {LAST_TO_LAST_START} {LAST_TO_LAST_END}
-      // These are replaced at query-time in the Telegram bot.
-      const exCount = await pool.query('SELECT COUNT(*) FROM ai_query_examples');
-      if (parseInt(exCount.rows[0].count) === 0) {
-        const seeds = [
-          { q: "What did I spend on groceries last month?", s: "SELECT COALESCE(SUM(amount), 0) AS total FROM expenses WHERE category_id IN (SELECT id FROM categories WHERE name ILIKE '%grocery%') AND date >= '{LAST_MONTH_START}' AND date <= '{LAST_MONTH_END}'", d: "Total grocery spend for last month" },
-          { q: "What was my biggest expense last month?", s: "SELECT e.amount, e.description, e.date, c.name AS category FROM expenses e LEFT JOIN categories c ON e.category_id = c.id WHERE e.date >= '{LAST_MONTH_START}' AND e.date <= '{LAST_MONTH_END}' ORDER BY e.amount DESC LIMIT 1", d: "Single largest expense last month" },
-          { q: "What was my biggest expense two months ago?", s: "SELECT e.amount, e.description, e.date, c.name AS category FROM expenses e LEFT JOIN categories c ON e.category_id = c.id WHERE e.date >= '{LAST_TO_LAST_START}' AND e.date <= '{LAST_TO_LAST_END}' ORDER BY e.amount DESC LIMIT 1", d: "Single largest expense in last-to-last month" },
-          { q: "Show me my top 5 expenses this month", s: "SELECT e.amount, e.description, e.date, c.name AS category FROM expenses e LEFT JOIN categories c ON e.category_id = c.id WHERE e.date >= '{THIS_MONTH_START}' AND e.date <= '{TODAY}' ORDER BY e.amount DESC LIMIT 5", d: "Top 5 biggest expenses this month" },
-          { q: "What is my income and expense summary for last month?", s: "SELECT (SELECT COALESCE(SUM(amount), 0) FROM income WHERE date >= '{LAST_MONTH_START}' AND date <= '{LAST_MONTH_END}') AS total_income, (SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE date >= '{LAST_MONTH_START}' AND date <= '{LAST_MONTH_END}') AS total_expenses", d: "Income vs expenses summary for last month" },
-          { q: "Can you provide last to last month income and expense summary?", s: "SELECT (SELECT COALESCE(SUM(amount), 0) FROM income WHERE date >= '{LAST_TO_LAST_START}' AND date <= '{LAST_TO_LAST_END}') AS total_income, (SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE date >= '{LAST_TO_LAST_START}' AND date <= '{LAST_TO_LAST_END}') AS total_expenses", d: "Income vs expenses summary for 2 months ago" },
-          { q: "What is my income and expense summary for this month?", s: "SELECT (SELECT COALESCE(SUM(amount), 0) FROM income WHERE date >= '{THIS_MONTH_START}' AND date <= '{TODAY}') AS total_income, (SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE date >= '{THIS_MONTH_START}' AND date <= '{TODAY}') AS total_expenses", d: "Income vs expenses summary for this month" },
-          { q: "What is my net savings this month?", s: "SELECT (SELECT COALESCE(SUM(amount), 0) FROM income WHERE date >= '{THIS_MONTH_START}' AND date <= '{TODAY}') - (SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE date >= '{THIS_MONTH_START}' AND date <= '{TODAY}') AS net_savings", d: "Net savings (income minus expenses) this month" },
-          { q: "Am I saving money this month?", s: "SELECT (SELECT COALESCE(SUM(amount), 0) FROM income WHERE date >= '{THIS_MONTH_START}' AND date <= '{TODAY}') - (SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE date >= '{THIS_MONTH_START}' AND date <= '{TODAY}') AS net_savings", d: "Net savings check for this month" },
-          { q: "Give me a category-wise breakdown of my spending this month", s: "SELECT c.name AS category, COALESCE(SUM(e.amount), 0) AS total FROM expenses e LEFT JOIN categories c ON e.category_id = c.id WHERE e.date >= '{THIS_MONTH_START}' AND e.date <= '{TODAY}' GROUP BY c.name ORDER BY total DESC", d: "Spending grouped by category this month" },
-          { q: "Give me a category-wise breakdown for last month", s: "SELECT c.name AS category, COALESCE(SUM(e.amount), 0) AS total FROM expenses e LEFT JOIN categories c ON e.category_id = c.id WHERE e.date >= '{LAST_MONTH_START}' AND e.date <= '{LAST_MONTH_END}' GROUP BY c.name ORDER BY total DESC", d: "Spending grouped by category last month" },
-          { q: "What did I spend the most on this year?", s: "SELECT c.name AS category, COALESCE(SUM(e.amount), 0) AS total FROM expenses e LEFT JOIN categories c ON e.category_id = c.id WHERE e.date >= DATE_TRUNC('year', CURRENT_DATE) GROUP BY c.name ORDER BY total DESC LIMIT 5", d: "Top 5 spending categories this year" },
-          { q: "What did I spend month by month this year?", s: "SELECT TO_CHAR(DATE_TRUNC('month', date), 'Mon YYYY') AS month, COALESCE(SUM(amount), 0) AS total FROM expenses WHERE date >= DATE_TRUNC('year', CURRENT_DATE) GROUP BY DATE_TRUNC('month', date) ORDER BY DATE_TRUNC('month', date)", d: "Monthly expense trend this year" },
-          { q: "Compare my grocery spending this month vs last month", s: "SELECT (SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE category_id IN (SELECT id FROM categories WHERE name ILIKE '%grocery%') AND date >= '{THIS_MONTH_START}' AND date <= '{TODAY}') AS this_month, (SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE category_id IN (SELECT id FROM categories WHERE name ILIKE '%grocery%') AND date >= '{LAST_MONTH_START}' AND date <= '{LAST_MONTH_END}') AS last_month", d: "Grocery spend comparison this month vs last" },
-          { q: "How much did I spend on food in the last 3 months?", s: "SELECT COALESCE(SUM(amount), 0) AS total FROM expenses WHERE category_id IN (SELECT id FROM categories WHERE name ILIKE '%food%') AND date >= CURRENT_DATE - INTERVAL '3 months'", d: "Total food spend rolling 3 months" },
-          { q: "How much did I spend on insurance in the past 6 months?", s: "SELECT COALESCE(SUM(amount), 0) AS total FROM expenses WHERE category_id IN (SELECT id FROM categories WHERE name ILIKE '%insurance%') AND date >= CURRENT_DATE - INTERVAL '6 months'", d: "Total insurance spend rolling 6 months" },
-          { q: "How much have I spent on medical in the last 3 months?", s: "SELECT COALESCE(SUM(amount), 0) AS total FROM expenses WHERE category_id IN (SELECT id FROM categories WHERE name ILIKE '%medical%' OR name ILIKE '%health%' OR name ILIKE '%hospital%') AND date >= CURRENT_DATE - INTERVAL '3 months'", d: "Total medical/health spend rolling 3 months" },
-          { q: "How much have I earned this month?", s: "SELECT COALESCE(SUM(amount), 0) AS total_income FROM income WHERE date >= '{THIS_MONTH_START}' AND date <= '{TODAY}'", d: "Total income this month" },
-          { q: "Show me all my income sources this year", s: "SELECT source, COALESCE(SUM(amount), 0) AS total FROM income WHERE date >= DATE_TRUNC('year', CURRENT_DATE) GROUP BY source ORDER BY total DESC", d: "Income breakdown by source this year" },
-          { q: "What was my highest income month this year?", s: "SELECT TO_CHAR(DATE_TRUNC('month', date), 'Mon YYYY') AS month, COALESCE(SUM(amount), 0) AS total FROM income WHERE date >= DATE_TRUNC('year', CURRENT_DATE) GROUP BY DATE_TRUNC('month', date) ORDER BY total DESC LIMIT 1", d: "Best earning month this year" },
-          { q: "What is my total spending this year?", s: "SELECT COALESCE(SUM(amount), 0) AS total FROM expenses WHERE date >= DATE_TRUNC('year', CURRENT_DATE)", d: "Cumulative expenses since Jan 1" },
-          { q: "What is my current account balance?", s: "SELECT sa.balance, b.name AS bank, sa.currency FROM savings_accounts sa LEFT JOIN banks b ON sa.bank_id = b.id ORDER BY sa.balance DESC", d: "All account balances with bank names" },
-          { q: "How much have I lent out that hasn't been repaid?", s: "SELECT recipient, SUM(amount) AS total_lent FROM lending WHERE repaid = 0 GROUP BY recipient ORDER BY total_lent DESC", d: "Outstanding lending amounts per person" },
-          { q: "What money have I transferred this month?", s: "SELECT recipient, amount, method, date FROM transfers WHERE date >= '{THIS_MONTH_START}' AND date <= '{TODAY}' ORDER BY date DESC LIMIT 20", d: "Transfers sent this month" },
-          { q: "How many times did I eat out last month?", s: "SELECT COUNT(*) AS count FROM expenses WHERE category_id IN (SELECT id FROM categories WHERE name ILIKE '%restaurant%' OR name ILIKE '%dining%' OR name ILIKE '%food%') AND date >= '{LAST_MONTH_START}' AND date <= '{LAST_MONTH_END}'", d: "Number of dining/restaurant expenses last month" },
-          { q: "What is my average monthly spend on utilities?", s: "SELECT ROUND(AVG(monthly_total)::numeric, 2) AS avg_monthly FROM (SELECT DATE_TRUNC('month', date) AS month, SUM(amount) AS monthly_total FROM expenses WHERE category_id IN (SELECT id FROM categories WHERE name ILIKE '%utility%' OR name ILIKE '%utilities%' OR name ILIKE '%electricity%') GROUP BY month) sub", d: "Average utility cost per month" },
-          { q: "What were my recent expenses?", s: "SELECT e.amount, e.description, e.date, c.name AS category FROM expenses e LEFT JOIN categories c ON e.category_id = c.id ORDER BY e.date DESC LIMIT 10", d: "10 most recent expense entries" },
-          { q: "How much did I spend last year?", s: "SELECT COALESCE(SUM(amount), 0) AS total FROM expenses WHERE date >= CURRENT_DATE - INTERVAL '1 year'", d: "Total expenses over the last 12 months" },
-        ];
-        for (const seed of seeds) {
-          await pool.query('INSERT INTO ai_query_examples (question, sql_query, description) VALUES ($1, $2, $3)', [seed.q, seed.s, seed.d]);
-        }
       }
 
       await initJwtSecret();
@@ -300,36 +207,23 @@ const sanitizeSqlFile = (filePath) => {
 };
 
 const sendTelegramMessage = async (text) => {
-  let token = process.env.TELEGRAM_BOT_TOKEN; 
-  let chatId = process.env.TELEGRAM_CHAT_ID;
-  
   try {
-    const settings = await pool.query("SELECT key, value FROM system_settings WHERE key IN ('TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID')");
-    const map = {}; settings.rows.forEach(r => map[r.key] = r.value);
-    token = map['TELEGRAM_BOT_TOKEN'] || token; 
-    chatId = map['TELEGRAM_CHAT_ID'] || chatId;
-  } catch(e) {}
-  
-  if (!token || !chatId) return;
+    const rows = (await pool.query("SELECT key, value FROM system_settings WHERE key IN ('TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID')")).rows;
+    const config = rows.reduce((acc, row) => {
+      acc[row.key] = row.value;
+      return acc;
+    }, {});
 
-  try {
-    await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, { 
-      chat_id: chatId, 
-      text: text, 
-      parse_mode: 'Markdown' 
+    if (!config.TELEGRAM_BOT_TOKEN || !config.TELEGRAM_CHAT_ID) return false;
+
+    await axios.post(`https://api.telegram.org/bot${config.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      chat_id: config.TELEGRAM_CHAT_ID,
+      text,
+      parse_mode: 'Markdown',
     });
-    console.log(`✅ [TELEGRAM] Message sent successfully!`);
+    return true;
   } catch (err) {
-    console.warn(`⚠️ [TELEGRAM WARNING] Markdown rejected by Telegram. Attempting fallback... Error:`, err.response?.data?.description || err.message);
-    try {
-      await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, { 
-        chat_id: chatId, 
-        text: text 
-      });
-      console.log(`✅ [TELEGRAM] Fallback message sent successfully (Raw Text)!`);
-    } catch (fallbackErr) {
-      console.error(`❌ [TELEGRAM CRITICAL ERROR] Failed to send message entirely:`, fallbackErr.response?.data || fallbackErr.message);
-    }
+    return false;
   }
 };
 
@@ -344,8 +238,8 @@ const notifyAdmin = async (message, sendToTelegram = false) => {
   try { 
     await pool.query('INSERT INTO notifications (message) VALUES ($1)', [message]); 
     await logAction(message);
-    if (sendToTelegram) { 
-      await sendTelegramMessage(message); 
+    if (sendToTelegram) {
+      await sendTelegramMessage(message);
     }
   } catch(e) {}
 };
@@ -406,7 +300,6 @@ app.post('/api/system/soft-reset', isAdmin, async (req, res) => {
     await pool.query('DELETE FROM lending'); 
     await pool.query('DELETE FROM investment_logs'); 
     await pool.query('DELETE FROM investments'); 
-    await pool.query('DELETE FROM ai_monthly_insights');
     await pool.query('UPDATE savings_accounts SET balance = 0'); 
     await pool.query('UPDATE credit_cards SET balance = 0'); 
     await pool.query('DELETE FROM notifications');
@@ -446,7 +339,7 @@ app.get('/api/system/health', async (req, res) => {
 app.get('/api/system/docker-logs', isAdmin, async (req, res) => {
   try {
     const containers = await docker.listContainers({ all: true });
-    const targetNames = ['vault_frontend', 'vault_backend', 'vault_db', 'vault_ollama', 'vault_nginx'];
+    const targetNames = ['vault_frontend', 'vault_backend', 'vault_db', 'vault_nginx'];
     let allLogs = [];
     for (const containerInfo of containers) {
       const name = containerInfo.Names[0].replace('/', '');
@@ -690,17 +583,95 @@ const createAdminRoutes = (endpoint, table) => {
   }); 
 };
 
-app.get('/api/categories', async (req, res) => { try { res.json((await pool.query('SELECT * FROM categories ORDER BY name')).rows); } catch (err) { res.status(500).json({ error: err.message }); } });
-createAdminRoutes('categories', 'categories'); 
+app.get('/api/categories', async (req, res) => { try { res.json((await pool.query('SELECT * FROM categories ORDER BY COALESCE(sort_order, id), name, id')).rows); } catch (err) { res.status(500).json({ error: err.message }); } });
+app.post('/api/categories', isAdmin, async (req, res) => {
+  try {
+    const nextSort = (await pool.query('SELECT COALESCE(MAX(sort_order), 0) + 1 AS next_sort FROM categories')).rows[0].next_sort;
+    const result = await pool.query('INSERT INTO categories (name, sort_order) VALUES ($1, $2) RETURNING *', [req.body.name, nextSort]);
+    await logAction(`System config added: [categories] ${req.body.name}`);
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+app.put('/api/categories/:id', isAdmin, async (req, res) => {
+  try {
+    const result = await pool.query('UPDATE categories SET name = $1 WHERE id = $2 RETURNING *', [req.body.name, req.params.id]);
+    await logAction(`System config modified: [categories] ID ${req.params.id} changed to ${req.body.name}`);
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+app.delete('/api/categories/:id', isAdmin, async (req, res) => {
+  try {
+    await pool.query('DELETE FROM categories WHERE id = $1', [req.params.id]);
+    await logAction(`System config deleted: [categories] ID ${req.params.id}`);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'In use.' });
+  }
+});
+app.post('/api/categories/:id/move', isAdmin, async (req, res) => {
+  const direction = req.body.direction;
+  if (!['up', 'down'].includes(direction)) return res.status(400).json({ error: 'Invalid move direction.' });
+  try {
+    await pool.query('BEGIN');
+    const currentResult = await pool.query('SELECT id, sort_order FROM categories WHERE id = $1 FOR UPDATE', [req.params.id]);
+    if (currentResult.rows.length === 0) {
+      await pool.query('ROLLBACK');
+      return res.status(404).json({ error: 'Category not found.' });
+    }
 
-app.get('/api/banks', async (req, res) => { try { res.json((await pool.query('SELECT * FROM banks ORDER BY name')).rows); } catch (err) { res.status(500).json({ error: err.message }); } });
+    const current = currentResult.rows[0];
+    const swapQuery = direction === 'up'
+      ? 'SELECT id, sort_order FROM categories WHERE COALESCE(sort_order, id) < COALESCE($1, $2) ORDER BY COALESCE(sort_order, id) DESC, id DESC LIMIT 1 FOR UPDATE'
+      : 'SELECT id, sort_order FROM categories WHERE COALESCE(sort_order, id) > COALESCE($1, $2) ORDER BY COALESCE(sort_order, id) ASC, id ASC LIMIT 1 FOR UPDATE';
+    const adjacentResult = await pool.query(swapQuery, [current.sort_order, current.id]);
+    if (adjacentResult.rows.length === 0) {
+      await pool.query('ROLLBACK');
+      return res.json({ success: true, moved: false });
+    }
+
+    const adjacent = adjacentResult.rows[0];
+    await pool.query('UPDATE categories SET sort_order = $1 WHERE id = $2', [adjacent.sort_order ?? adjacent.id, current.id]);
+    await pool.query('UPDATE categories SET sort_order = $1 WHERE id = $2', [current.sort_order ?? current.id, adjacent.id]);
+    await pool.query('COMMIT');
+    res.json({ success: true, moved: true });
+  } catch (err) {
+    await pool.query('ROLLBACK');
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/categories/reorder', isAdmin, async (req, res) => {
+  const { categoryIds } = req.body;
+  if (!Array.isArray(categoryIds) || categoryIds.length === 0) {
+    return res.status(400).json({ error: 'Invalid category order.' });
+  }
+
+  try {
+    await pool.query('BEGIN');
+    for (let i = 0; i < categoryIds.length; i += 1) {
+      await pool.query('UPDATE categories SET sort_order = $1 WHERE id = $2', [i + 1, categoryIds[i]]);
+    }
+    await pool.query('COMMIT');
+    res.json({ success: true });
+  } catch (err) {
+    await pool.query('ROLLBACK');
+    res.status(500).json({ error: err.message });
+  }
+});
+
 createAdminRoutes('banks', 'banks'); 
 
-app.get('/api/recipient-banks', async (req, res) => { try { res.json((await pool.query('SELECT * FROM recipient_banks ORDER BY name')).rows); } catch (err) { res.status(500).json({ error: err.message }); } });
+app.get('/api/banks', async (req, res) => { try { res.json((await pool.query('SELECT * FROM banks ORDER BY name')).rows); } catch (err) { res.status(500).json({ error: err.message }); } });
 createAdminRoutes('recipient-banks', 'recipient_banks'); 
 
-app.get('/api/account-types', async (req, res) => { try { res.json((await pool.query('SELECT * FROM account_types ORDER BY name')).rows); } catch (err) { res.status(500).json({ error: err.message }); } });
+app.get('/api/recipient-banks', async (req, res) => { try { res.json((await pool.query('SELECT * FROM recipient_banks ORDER BY name')).rows); } catch (err) { res.status(500).json({ error: err.message }); } });
 createAdminRoutes('account-types', 'account_types');
+
+app.get('/api/account-types', async (req, res) => { try { res.json((await pool.query('SELECT * FROM account_types ORDER BY name')).rows); } catch (err) { res.status(500).json({ error: err.message }); } });
 
 app.get('/api/credit-cards', async (req, res) => { try { res.json((await pool.query('SELECT * FROM credit_cards ORDER BY name')).rows); } catch (err) { res.status(500).json({ error: err.message }); } });
 app.post('/api/credit-cards', isAdmin, async (req, res) => { try { res.json((await pool.query('INSERT INTO credit_cards (name, limit_amount) VALUES ($1, $2) RETURNING *', [req.body.name, req.body.limit_amount])).rows[0]); await logAction(`Credit Card minted: ${req.body.name}`); } catch (err) { res.status(500).json({ error: err.message }); } });
@@ -715,7 +686,7 @@ app.post('/api/credit-cards/:id/repay', async (req, res) => { const { account_id
         res.json(transferResult.rows[0]);
       } catch (err) { res.status(500).json({ error: err.message }); } });
 
-app.get('/api/investments', async (req, res) => { try { res.json((await pool.query(`SELECT i.id, i.name, i.type, i.bank_id, i.account_type_id, b.name as bank_name, act.name as account_type_name, COALESCE((SELECT balance FROM investment_logs il WHERE il.investment_id = i.id AND il.status != 'DELETED' ORDER BY date DESC, id DESC LIMIT 1), 0) as current_balance, COALESCE((SELECT SUM(net_contribution) FROM investment_logs il WHERE il.investment_id = i.id AND il.status != 'DELETED'), 0) as total_contributed FROM investments i LEFT JOIN banks b ON i.bank_id = b.id LEFT JOIN account_types act ON i.account_type_id = act.id WHERE i.status != 'DELETED' ORDER BY i.id DESC`)).rows); } catch (err) { res.status(500).json({ error: err.message }); } });
+app.get('/api/investments', async (req, res) => { try { res.json((await pool.query(`SELECT i.id, i.name, i.type, i.bank_id, i.account_type_id, b.name as bank_name, act.name as account_type_name, COALESCE((SELECT balance FROM investment_logs il WHERE il.investment_id = i.id AND il.status != 'DELETED' ORDER BY date DESC, id DESC LIMIT 1), 0) as current_balance, COALESCE((SELECT SUM(net_contribution) FROM investment_logs il WHERE il.investment_id = i.id AND il.status != 'DELETED'), 0) as total_contributed, (SELECT date FROM investment_logs il WHERE il.investment_id = i.id AND il.status != 'DELETED' ORDER BY date DESC, id DESC LIMIT 1) as last_log_date FROM investments i LEFT JOIN banks b ON i.bank_id = b.id LEFT JOIN account_types act ON i.account_type_id = act.id WHERE i.status != 'DELETED' ORDER BY i.id DESC`)).rows); } catch (err) { res.status(500).json({ error: err.message }); } });
 app.post('/api/investments', async (req, res) => { try { await pool.query('BEGIN'); const result = await pool.query('INSERT INTO investments (name, bank_id, account_type_id, type) VALUES ($1, $2, $3, $4) RETURNING *', [req.body.name, req.body.bank_id || null, req.body.account_type_id || null, req.body.type]);
         const newInv = result.rows[0];
         if (req.body.initial_amount && req.body.initial_amount !== '') {
@@ -733,6 +704,92 @@ app.delete('/api/investments/:id', async (req, res) => { try { const oldInv = (a
     } catch (e) { res.status(500).json({error: e.message}); } });
 
 app.get('/api/investment-logs', async (req, res) => { try { res.json((await pool.query(`SELECT il.*, i.name as investment_name, i.type as investment_type FROM investment_logs il JOIN investments i ON il.investment_id = i.id WHERE i.status != 'DELETED' ORDER BY il.date DESC, il.id DESC`)).rows); } catch (err) { res.status(500).json({ error: err.message }); } });
+app.get('/api/investments/:id/logs', async (req, res) => {
+  try {
+    const logs = await pool.query(
+      `SELECT il.id, il.investment_id, il.date, il.balance, il.net_contribution, il.status, i.name as investment_name, i.type as investment_type
+       FROM investment_logs il
+       JOIN investments i ON il.investment_id = i.id
+       WHERE il.investment_id = $1 AND il.status != 'DELETED' AND i.status != 'DELETED'
+       ORDER BY il.date DESC, il.id DESC
+       LIMIT 120`,
+      [req.params.id]
+    );
+    res.json(logs.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+app.get('/api/investment-reminders', isAdmin, async (req, res) => {
+  try {
+    const query = await pool.query(`
+      SELECT
+        i.id AS investment_id,
+        i.name,
+        i.type,
+        act.name AS account_type_name,
+        COALESCE(rs.is_enabled, FALSE) AS is_enabled,
+        COALESCE(rs.frequency_days, 30) AS frequency_days,
+        rs.last_sent_on,
+        (
+          SELECT il.date
+          FROM investment_logs il
+          WHERE il.investment_id = i.id AND il.status != 'DELETED'
+          ORDER BY il.date DESC, il.id DESC
+          LIMIT 1
+        ) AS last_log_date
+      FROM investments i
+      LEFT JOIN account_types act ON i.account_type_id = act.id
+      LEFT JOIN investment_reminder_settings rs ON rs.investment_id = i.id
+      WHERE i.status != 'DELETED'
+      ORDER BY i.name ASC
+    `);
+    res.json(query.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/investment-reminders', isAdmin, async (req, res) => {
+  const { settings } = req.body;
+  if (!Array.isArray(settings)) return res.status(400).json({ error: 'Invalid settings payload.' });
+
+  try {
+    await pool.query('BEGIN');
+    for (const row of settings) {
+      const investmentId = Number(row.investment_id);
+      const frequencyDays = Number(row.frequency_days);
+      const isEnabled = Boolean(row.is_enabled);
+
+      if (!Number.isInteger(investmentId) || investmentId <= 0) {
+        await pool.query('ROLLBACK');
+        return res.status(400).json({ error: 'Invalid investment id in settings.' });
+      }
+      if (!Number.isInteger(frequencyDays) || frequencyDays < 1 || frequencyDays > 365) {
+        await pool.query('ROLLBACK');
+        return res.status(400).json({ error: 'Frequency must be between 1 and 365 days.' });
+      }
+
+      await pool.query(
+        `INSERT INTO investment_reminder_settings (investment_id, is_enabled, frequency_days, updated_at)
+         VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+         ON CONFLICT (investment_id)
+         DO UPDATE SET
+           is_enabled = EXCLUDED.is_enabled,
+           frequency_days = EXCLUDED.frequency_days,
+           updated_at = CURRENT_TIMESTAMP`,
+        [investmentId, isEnabled, frequencyDays]
+      );
+    }
+    await pool.query('COMMIT');
+    await logAction(`Investment reminder rules updated for ${settings.length} assets`);
+    res.json({ success: true });
+  } catch (err) {
+    await pool.query('ROLLBACK');
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/investment-logs', async (req, res) => { try { const r = await pool.query('INSERT INTO investment_logs (investment_id, date, balance, net_contribution) VALUES ($1, $2, $3, $4) RETURNING *', [req.body.investment_id, req.body.date, req.body.balance, req.body.net_contribution || 0]);
         notifyAdmin(`Investment Logged: Month balance updated`);
         res.json(r.rows[0]);
@@ -1026,6 +1083,52 @@ app.post('/api/system-settings/backup', isAdmin, async (req, res) => {
     } catch(e) { await pool.query('ROLLBACK'); res.status(500).json({error: e.message}); }
 });
 
+app.get('/api/system-settings/investment-reminders', isAdmin, async (req, res) => {
+  try {
+    const settings = await pool.query("SELECT key, value FROM system_settings WHERE key IN ('INVESTMENT_REMINDER_TIME', 'INVESTMENT_REMINDER_TIMEZONE')");
+    const defaultTimezone = process.env.TZ || 'America/Toronto';
+    const map = {
+      INVESTMENT_REMINDER_TIME: '09:00',
+      INVESTMENT_REMINDER_TIMEZONE: defaultTimezone,
+    };
+    settings.rows.forEach((r) => {
+      map[r.key] = r.value;
+    });
+    res.json(map);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/system-settings/investment-reminders', isAdmin, async (req, res) => {
+  const { reminderTime, reminderTimezone } = req.body;
+  const normalizedTime = String(reminderTime || '').trim();
+  const normalizedTimezone = String(reminderTimezone || '').trim();
+
+  if (!/^([01]\d|2[0-3]):([0-5]\d)$/.test(normalizedTime)) {
+    return res.status(400).json({ error: 'Reminder time must be in HH:mm (24h) format.' });
+  }
+
+  try {
+    // Validate IANA timezone.
+    new Intl.DateTimeFormat('en-US', { timeZone: normalizedTimezone }).format(new Date());
+  } catch (err) {
+    return res.status(400).json({ error: 'Invalid timezone. Use a valid IANA timezone like America/Toronto.' });
+  }
+
+  try {
+    await pool.query('BEGIN');
+    await pool.query('INSERT INTO system_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value', ['INVESTMENT_REMINDER_TIME', normalizedTime]);
+    await pool.query('INSERT INTO system_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value', ['INVESTMENT_REMINDER_TIMEZONE', normalizedTimezone]);
+    await pool.query('COMMIT');
+    await logAction(`Investment reminder schedule updated: ${normalizedTime} ${normalizedTimezone}`);
+    res.json({ success: true, INVESTMENT_REMINDER_TIME: normalizedTime, INVESTMENT_REMINDER_TIMEZONE: normalizedTimezone });
+  } catch (e) {
+    await pool.query('ROLLBACK');
+    res.status(500).json({ error: e.message });
+  }
+});
+
 cron.schedule('* * * * *', async () => {
     try {
         const settings = await pool.query("SELECT key, value FROM system_settings WHERE key IN ('BACKUP_FREQ', 'BACKUP_TIME', 'BACKUP_DAY')");
@@ -1044,6 +1147,107 @@ cron.schedule('* * * * *', async () => {
             if (shouldBackup) await performBackup('Scheduled backup performed as per user configuration.', true);
         }
     } catch(err) {}
+});
+
+const getDateTimePartsInTimeZone = (timeZone, date = new Date()) => {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+
+  const pick = (type) => parts.find((p) => p.type === type)?.value || '00';
+  return {
+    date: `${pick('year')}-${pick('month')}-${pick('day')}`,
+    time: `${pick('hour')}:${pick('minute')}`,
+  };
+};
+
+const addDaysToDateString = (dateStr, days) => {
+  const [year, month, day] = String(dateStr).split('-').map((v) => Number(v));
+  if (!year || !month || !day) return dateStr;
+  const utc = new Date(Date.UTC(year, month - 1, day));
+  utc.setUTCDate(utc.getUTCDate() + Number(days || 0));
+  return `${utc.getUTCFullYear()}-${String(utc.getUTCMonth() + 1).padStart(2, '0')}-${String(utc.getUTCDate()).padStart(2, '0')}`;
+};
+
+const runInvestmentReminderSweep = async (timeZone) => {
+  try {
+    const rows = (await pool.query(`
+      SELECT
+        i.id,
+        i.name,
+        i.type,
+        act.name AS account_type_name,
+        rs.frequency_days,
+        TO_CHAR(rs.last_sent_on, 'YYYY-MM-DD') AS last_sent_on,
+        (
+          SELECT TO_CHAR(il.date, 'YYYY-MM-DD')
+          FROM investment_logs il
+          WHERE il.investment_id = i.id AND il.status != 'DELETED'
+          ORDER BY il.date DESC, il.id DESC
+          LIMIT 1
+        ) AS last_log_date
+      FROM investment_reminder_settings rs
+      JOIN investments i ON i.id = rs.investment_id
+      LEFT JOIN account_types act ON i.account_type_id = act.id
+      WHERE rs.is_enabled = TRUE AND i.status != 'DELETED'
+    `)).rows;
+
+    const { date: todayStr } = getDateTimePartsInTimeZone(timeZone);
+
+    for (const row of rows) {
+      const frequencyDays = Number(row.frequency_days || 30);
+      if (!Number.isInteger(frequencyDays) || frequencyDays < 1) continue;
+
+      const baseDate = row.last_log_date || todayStr;
+      const dueStr = addDaysToDateString(baseDate, frequencyDays);
+      const sentToday = row.last_sent_on && String(row.last_sent_on) === todayStr;
+
+      if (todayStr >= dueStr && !sentToday) {
+        const label = [row.account_type_name, row.type].filter(Boolean).join(' | ');
+        const message = `⏰ *Investment Reminder*\n\nAsset: *${row.name}*${label ? `\nType: ${label}` : ''}\nCadence: every ${frequencyDays} day(s)\nLast logged: ${row.last_log_date || 'No value log yet'}\nDue since: ${dueStr}\nDispatch timezone: ${timeZone}\n\nPlease update the investment value in Vault.`;
+        await sendTelegramMessage(message);
+        await pool.query('UPDATE investment_reminder_settings SET last_sent_on = $2::date, updated_at = CURRENT_TIMESTAMP WHERE investment_id = $1', [row.id, todayStr]);
+        await notifyAdmin(`Investment reminder sent for ${row.name}`, false);
+      }
+    }
+  } catch (err) {}
+};
+
+cron.schedule('* * * * *', async () => {
+  try {
+    const defaultTimezone = process.env.TZ || 'America/Toronto';
+    const settings = await pool.query("SELECT key, value FROM system_settings WHERE key IN ('INVESTMENT_REMINDER_TIME', 'INVESTMENT_REMINDER_TIMEZONE', 'INVESTMENT_REMINDER_LAST_RUN_DATE')");
+    const map = {
+      INVESTMENT_REMINDER_TIME: '09:00',
+      INVESTMENT_REMINDER_TIMEZONE: defaultTimezone,
+      INVESTMENT_REMINDER_LAST_RUN_DATE: '',
+    };
+    settings.rows.forEach((row) => {
+      map[row.key] = row.value;
+    });
+
+    let timeZone = map.INVESTMENT_REMINDER_TIMEZONE;
+    try {
+      new Intl.DateTimeFormat('en-US', { timeZone }).format(new Date());
+    } catch (err) {
+      timeZone = defaultTimezone;
+    }
+
+    const nowInTz = getDateTimePartsInTimeZone(timeZone);
+    const dueTime = map.INVESTMENT_REMINDER_TIME || '09:00';
+    const alreadyRanToday = map.INVESTMENT_REMINDER_LAST_RUN_DATE === nowInTz.date;
+
+    if (nowInTz.time !== dueTime || alreadyRanToday) return;
+
+    await runInvestmentReminderSweep(timeZone);
+    await pool.query('INSERT INTO system_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value', ['INVESTMENT_REMINDER_LAST_RUN_DATE', nowInTz.date]);
+  } catch (err) {}
 });
 
 app.post('/api/restore', isAdmin, upload.single('backup'), async (req, res) => {
@@ -1069,7 +1273,6 @@ app.post('/api/restore', isAdmin, upload.single('backup'), async (req, res) => {
         await pool.query(`UPDATE users SET role = 'admin' WHERE id = (SELECT MIN(id) FROM users)`);
         await initJwtSecret();
         await notifyAdmin(`🔄 System Database successfully restored from external file.`, true);
-        if (typeof runHistoricalBackfill === 'function') setTimeout(runHistoricalBackfill, 3000);
         res.json({ success: true }); 
     } catch (dbErr) {
         logger.error(`External Restore Verification Failed: ${dbErr.message}`);
@@ -1087,6 +1290,8 @@ app.post('/api/restore', isAdmin, upload.single('backup'), async (req, res) => {
 const generateMonthlyReportData = async () => {
     const now = new Date();
     const currentMonthStr = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+  const categoryOrderRows = (await pool.query('SELECT id, name, COALESCE(sort_order, id) AS sort_order FROM categories ORDER BY COALESCE(sort_order, id), name, id')).rows;
+  const categoryOrderMap = new Map(categoryOrderRows.map((category, index) => [category.name, { order: Number(category.sort_order ?? category.id), index }]));
 
     const inc = await pool.query(`SELECT TO_CHAR(date, 'YYYY-MM') as month, SUM(amount) as total FROM income WHERE status != 'DELETED' GROUP BY month`);
     const exp = await pool.query(`SELECT TO_CHAR(date, 'YYYY-MM') as month, SUM(amount) as total FROM expenses WHERE status != 'DELETED' GROUP BY month`);
@@ -1127,14 +1332,12 @@ const generateMonthlyReportData = async () => {
         SELECT investment_id, inv_name, month, balance, net_contribution FROM RankedLogs WHERE rn = 1 ORDER BY month DESC
     `);
 
-    const aiInsights = await pool.query(`SELECT month, insights FROM ai_monthly_insights`);
-
     const monthsMap = {};
     const getMonthData = (m) => { 
         if (!monthsMap[m]) monthsMap[m] = { 
             month: m, income: 0, expense: 0, categories: {}, accounts: {}, 
             topExpenses: [], topIncome: [], transfers: [], loans: [], investments: [],
-            ai_insight: null, isCurrentMonth: m === currentMonthStr
+        isCurrentMonth: m === currentMonthStr
         }; 
         return monthsMap[m]; 
     };
@@ -1153,8 +1356,6 @@ const generateMonthlyReportData = async () => {
     incDetails.rows.forEach(r => { const m = getMonthData(r.month); if(m.topIncome.length < 10) m.topIncome.push({ src: r.source, amt: parseFloat(r.amount) }); });
     transferDetails.rows.forEach(r => { const m = getMonthData(r.month); if(m.transfers.length < 10) m.transfers.push({ to: r.recipient, amt: parseFloat(r.amount) }); });
     loanDetails.rows.forEach(r => { const m = getMonthData(r.month); if(m.loans.length < 10) m.loans.push({ to: r.recipient, amt: parseFloat(r.amount) }); });
-
-    aiInsights.rows.forEach(r => { getMonthData(r.month).ai_insight = r.insights; });
 
     // Filter out ghost months — months that have no income AND no expenses (e.g. from investment/transfer activity only)
     let sortedMonths = Object.values(monthsMap)
@@ -1178,13 +1379,23 @@ const generateMonthlyReportData = async () => {
                 const diff = parseFloat((currAmt - prevAmt).toFixed(2));
                 const pct = prevAmt > 0 ? parseFloat(((diff / prevAmt) * 100).toFixed(1)) : (currAmt > 0 ? 100 : 0);
                 return { category: cat, current: currAmt, previous: prevAmt, diff, pct };
-            }).sort((a, b) => b.current - a.current);
+            }).sort((a, b) => {
+              const orderA = categoryOrderMap.has(a.category) ? categoryOrderMap.get(a.category).order : Number.MAX_SAFE_INTEGER;
+              const orderB = categoryOrderMap.has(b.category) ? categoryOrderMap.get(b.category).order : Number.MAX_SAFE_INTEGER;
+              if (orderA !== orderB) return orderA - orderB;
+              return a.category.localeCompare(b.category);
+            });
         } else {
             current.incomeGrowth = 0; current.expenseGrowth = 0;
             current.catComparison = Object.keys(current.categories).map(cat => {
                 const currAmt = parseFloat(current.categories[cat]);
                 return { category: cat, current: currAmt, previous: 0, diff: currAmt, pct: 100 };
-            }).sort((a, b) => b.current - a.current);
+            }).sort((a, b) => {
+              const orderA = categoryOrderMap.has(a.category) ? categoryOrderMap.get(a.category).order : Number.MAX_SAFE_INTEGER;
+              const orderB = categoryOrderMap.has(b.category) ? categoryOrderMap.get(b.category).order : Number.MAX_SAFE_INTEGER;
+              if (orderA !== orderB) return orderA - orderB;
+              return a.category.localeCompare(b.category);
+            });
         }
 
         const currLogs = invLogs.rows.filter(r => r.month === current.month);
@@ -1199,171 +1410,180 @@ const generateMonthlyReportData = async () => {
     return sortedMonths;
 };
 
-app.get('/api/reports/monthly', async (req, res) => { try { res.json(await generateMonthlyReportData()); } catch(e) { res.status(500).json({ error: e.message }); } });
+app.get('/api/reports/monthly', async (req, res) => { try { res.json(await generateMonthlyReportData()); } catch (e) { res.status(500).json({ error: e.message }); } });
 
-const runHistoricalBackfill = async () => {
+app.get('/api/reports/monthly/:month/download', async (req, res) => {
+  const { month } = req.params;
+  if (!/^\d{4}-\d{2}$/.test(month)) {
+    return res.status(400).json({ error: 'Invalid month format. Use YYYY-MM.' });
+  }
+
   try {
-    const allData = await generateMonthlyReportData();
-    const now = new Date();
-    const currentMonthStr = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
-    const pastMonthsData = allData.filter(d => d.month < currentMonthStr);
-    let processedCount = 0;
+    const monthlyReports = await generateMonthlyReportData();
+    const report = monthlyReports.find((item) => item.month === month);
 
-    const userRes = await pool.query('SELECT username FROM users ORDER BY id ASC LIMIT 1');
-    const clientName = userRes.rows.length > 0 ? userRes.rows[0].username : 'Valued Client';
+    if (!report) return res.status(404).json({ error: 'No report data available for this month.' });
 
-    for (const monthData of pastMonthsData) {
-      const existing = await pool.query('SELECT insights FROM ai_monthly_insights WHERE month = $1', [monthData.month]);
-      
-      if (existing.rows.length === 0) {
-        const promptBrief = `
-          You are Vittaparāmarśadātā, an elite AI financial advisor built into the Dhanapālana platform.
-          Analyze the finalized financial data for ${monthData.month}.
-          
-          CRITICAL RULE: The client's name is ${clientName}. Address the client directly using their name, "you", and "your". Refer to yourself as "I" or "Vittaparāmarśadātā". Do NOT say the data belongs to Vittaparāmarśadātā.
+    const incomeTx = (await pool.query(`
+      SELECT i.id, i.source, i.amount, i.date,
+             b.name AS bank_name,
+             act.name AS account_type
+      FROM income i
+      LEFT JOIN savings_accounts s ON i.account_id = s.id
+      LEFT JOIN banks b ON s.bank_id = b.id
+      LEFT JOIN account_types act ON s.account_type_id = act.id
+      WHERE i.status != 'DELETED' AND TO_CHAR(i.date, 'YYYY-MM') = $1
+      ORDER BY i.date DESC, i.id DESC
+    `, [month])).rows;
 
-          DATA SUMMARY:
-          - Net Cash Flow: $${parseFloat(monthData.net || 0).toFixed(2)} (Savings Rate: ${monthData.savingsRate || 0}%)
-          - Total Income: $${parseFloat(monthData.income || 0).toFixed(2)}
-          - Total Expenses: $${parseFloat(monthData.expense || 0).toFixed(2)}
-          - Expense Growth vs Last Month: ${monthData.expenseGrowth || 0}%
+    const expenseTx = (await pool.query(`
+      SELECT e.id, e.amount, e.description, e.date,
+             c.name AS category,
+             b.name AS bank_name,
+             act.name AS account_type,
+             cc.name AS credit_card_name
+      FROM expenses e
+      JOIN categories c ON e.category_id = c.id
+      LEFT JOIN savings_accounts s ON e.account_id = s.id
+      LEFT JOIN banks b ON s.bank_id = b.id
+      LEFT JOIN account_types act ON s.account_type_id = act.id
+      LEFT JOIN credit_cards cc ON e.credit_card_id = cc.id
+      WHERE e.status != 'DELETED' AND TO_CHAR(e.date, 'YYYY-MM') = $1
+      ORDER BY e.date DESC, e.id DESC
+    `, [month])).rows;
 
-          CATEGORY CHANGES (VS LAST MONTH):
-          ${monthData.catComparison && monthData.catComparison.length > 0 ? monthData.catComparison.slice(0,4).map(c => `- ${c.category}: You spent $${c.current} (Difference: ${c.diff > 0 ? '+' : ''}$${c.diff} / ${c.pct}% change)`).join('\n') : 'No comparison data.'}
+    const bankStatements = (await pool.query(`
+      SELECT s.id,
+             b.name AS bank_name,
+             act.name AS account_type,
+             s.currency,
+             s.balance
+      FROM savings_accounts s
+      JOIN banks b ON s.bank_id = b.id
+      LEFT JOIN account_types act ON s.account_type_id = act.id
+      ORDER BY b.name, act.name NULLS LAST, s.id
+    `)).rows;
 
-          INVESTMENT PERFORMANCE:
-          ${monthData.investments && monthData.investments.length > 0 ? monthData.investments.map(i => `- ${i.name}: Closing Balance $${i.balance}, New Contribution $${i.contrib}, Gain/Loss $${parseFloat(i.gainLoss || 0).toFixed(2)}`).join('\n') : 'No active investments.'}
+    const creditUsage = (await pool.query(`
+      SELECT
+        cc.id,
+        cc.name,
+        cc.limit_amount,
+        cc.balance,
+        COALESCE(SUM(e.amount) FILTER (WHERE TO_CHAR(e.date, 'YYYY-MM') = $1 AND e.status != 'DELETED'), 0) AS monthly_spend
+      FROM credit_cards cc
+      LEFT JOIN expenses e ON e.credit_card_id = cc.id
+      GROUP BY cc.id, cc.name, cc.limit_amount, cc.balance
+      ORDER BY cc.name
+    `, [month])).rows;
 
-          Please provide your response in 3 brief sections:
-          1. Executive Summary (2 sentences max).
-          2. Specific Observations (2-3 bullet points calling out specific numbers from the category changes or investments).
-          3. Actionable Recommendation (1 bullet point).
-        `;
+    const transfers = (await pool.query(`
+      SELECT t.id, t.date, t.recipient, t.amount, t.inr_amount, t.method,
+             rb.name AS recipient_bank,
+             b.name AS source_bank,
+             act.name AS source_account_type
+      FROM transfers t
+      LEFT JOIN savings_accounts s ON t.source_account_id = s.id
+      LEFT JOIN banks b ON s.bank_id = b.id
+      LEFT JOIN account_types act ON s.account_type_id = act.id
+      LEFT JOIN recipient_banks rb ON t.recipient_bank_id = rb.id
+      WHERE t.status != 'DELETED' AND TO_CHAR(t.date, 'YYYY-MM') = $1
+      ORDER BY t.date DESC, t.id DESC
+    `, [month])).rows;
 
-        try {
-          const aiResult = await generateText({
-            model: ollama('vault-coder'),
-            prompt: promptBrief,
-            system: "You are Vittaparāmarśadātā, a professional financial advisor. Speak directly to the client. Do not output raw JSON."
-          });
-          await pool.query('INSERT INTO ai_monthly_insights (month, insights) VALUES ($1, $2)', [monthData.month, aiResult.text]);
-          processedCount++;
-          await new Promise(resolve => setTimeout(resolve, 10000));
-        } catch (aiErr) {}
-      }
-    }
+    const lending = (await pool.query(`
+      SELECT l.id, l.date, l.recipient, l.amount, l.repaid, l.method,
+             rb.name AS recipient_bank,
+             b.name AS source_bank,
+             act.name AS source_account_type
+      FROM lending l
+      LEFT JOIN savings_accounts s ON l.source_account_id = s.id
+      LEFT JOIN banks b ON s.bank_id = b.id
+      LEFT JOIN account_types act ON s.account_type_id = act.id
+      LEFT JOIN recipient_banks rb ON l.recipient_bank_id = rb.id
+      WHERE l.status != 'DELETED' AND TO_CHAR(l.date, 'YYYY-MM') = $1
+      ORDER BY l.date DESC, l.id DESC
+    `, [month])).rows;
 
-    if (processedCount > 0) {
-      await notifyAdmin(`✅ *Historical Backfill Complete*\n\nVittaparāmarśadātā has successfully analyzed and generated reports for ${processedCount} past month(s). Log in to download your official PDF reports!`, true);
-    }
-  } catch (error) {}
-};
+    const investmentChanges = (await pool.query(`
+      WITH month_logs AS (
+        SELECT
+          il.investment_id,
+          i.name,
+          i.type,
+          il.date,
+          il.balance,
+          il.net_contribution,
+          ROW_NUMBER() OVER (PARTITION BY il.investment_id ORDER BY il.date DESC, il.id DESC) AS rn
+        FROM investment_logs il
+        JOIN investments i ON i.id = il.investment_id
+        WHERE il.status != 'DELETED'
+          AND i.status != 'DELETED'
+          AND TO_CHAR(il.date, 'YYYY-MM') = $1
+      ),
+      prev_logs AS (
+        SELECT DISTINCT ON (il.investment_id)
+          il.investment_id,
+          il.balance AS previous_balance
+        FROM investment_logs il
+        WHERE il.status != 'DELETED'
+          AND TO_CHAR(il.date, 'YYYY-MM') < $1
+        ORDER BY il.investment_id, il.date DESC, il.id DESC
+      )
+      SELECT
+        ml.investment_id,
+        ml.name,
+        ml.type,
+        ml.date,
+        ml.balance,
+        ml.net_contribution,
+        COALESCE(pl.previous_balance, 0) AS previous_balance,
+        (ml.balance - COALESCE(pl.previous_balance, 0) - COALESCE(ml.net_contribution, 0)) AS gain_loss
+      FROM month_logs ml
+      LEFT JOIN prev_logs pl ON pl.investment_id = ml.investment_id
+      WHERE ml.rn = 1
+      ORDER BY ml.name
+    `, [month])).rows;
 
-app.post('/api/reports/analyze/:month', async (req, res) => {
-    try {
-        const targetMonth = req.params.month;
-        const now = new Date();
-        const currentMonthStr = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+    const payload = {
+      month,
+      summary: {
+        income: Number(report.income || 0),
+        expense: Number(report.expense || 0),
+        net: Number(report.net || 0),
+        savingsRate: Number(report.savingsRate || 0),
+        incomeGrowth: Number(report.incomeGrowth || 0),
+        expenseGrowth: Number(report.expenseGrowth || 0),
+      },
+      categoryComparison: report.catComparison || [],
+      accountActivity: report.accounts || {},
+      incomeTransactions: incomeTx,
+      expenseTransactions: expenseTx,
+      bankStatements,
+      creditCardUsage: creditUsage,
+      investmentChanges,
+      transfers,
+      lending,
+      generatedAt: new Date().toISOString(),
+      timezone: process.env.TZ || 'UTC',
+    };
 
-        if (targetMonth === currentMonthStr) { return res.status(400).json({error: "The current month is still active and cannot be analyzed yet."}); }
-
-        const reports = await generateMonthlyReportData();
-        const report = reports.find(r => r.month === targetMonth);
-        if (!report) return res.status(404).json({error: "Report data not found for this month."});
-        
-        const existing = await pool.query('SELECT insights FROM ai_monthly_insights WHERE month = $1', [targetMonth]);
-        if (existing.rows.length > 0) return res.status(400).json({error: "Insights already exist for this month."});
-
-        const userRes = await pool.query('SELECT username FROM users ORDER BY id ASC LIMIT 1');
-        const clientName = userRes.rows.length > 0 ? userRes.rows[0].username : 'Valued Client';
-
-        const promptBrief = `
-          You are Vittaparāmarśadātā, an elite AI financial advisor built into the Dhanapālana platform.
-          Analyze the finalized financial data for ${targetMonth}.
-          
-          CRITICAL RULE: The client's name is ${clientName}. Address the client directly using their name, "you", and "your". Refer to yourself as "I" or "Vittaparāmarśadātā". Do NOT say the data belongs to Vittaparāmarśadātā.
-
-          DATA SUMMARY:
-          - Net Cash Flow: $${parseFloat(report.net || 0).toFixed(2)} (Savings Rate: ${report.savingsRate || 0}%)
-          - Total Income: $${parseFloat(report.income || 0).toFixed(2)}
-          - Total Expenses: $${parseFloat(report.expense || 0).toFixed(2)}
-          - Expense Growth vs Last Month: ${report.expenseGrowth || 0}%
-
-          CATEGORY CHANGES (VS LAST MONTH):
-          ${report.catComparison && report.catComparison.length > 0 ? report.catComparison.slice(0,4).map(c => `- ${c.category}: You spent $${c.current} (Difference: ${c.diff > 0 ? '+' : ''}$${c.diff} / ${c.pct}% change)`).join('\n') : 'No comparison data.'}
-
-          INVESTMENT PERFORMANCE:
-          ${report.investments && report.investments.length > 0 ? report.investments.map(i => `- ${i.name}: Closing Balance $${i.balance}, New Contribution $${i.contrib}, Gain/Loss $${parseFloat(i.gainLoss || 0).toFixed(2)}`).join('\n') : 'No active investments.'}
-
-          Please provide your response in 3 brief sections:
-          1. Executive Summary (2 sentences max).
-          2. Specific Observations (2-3 bullet points calling out specific numbers from the category changes or investments).
-          3. Actionable Recommendation (1 bullet point).
-        `;
-
-        const aiResult = await generateText({ model: ollama('vault-coder'), prompt: promptBrief, system: "You are Vittaparāmarśadātā, a professional financial advisor. Speak directly to the client. Do not output raw JSON." });
-        const finalInsight = aiResult.text;
-        await pool.query('INSERT INTO ai_monthly_insights (month, insights) VALUES ($1, $2)', [targetMonth, finalInsight]);
-        await notifyAdmin(`✅ *Manual AI Analysis Complete*\n\nVittaparāmarśadātā has successfully analyzed the report for ${targetMonth}.`, true);
-        res.json({ success: true, insights: finalInsight });
-    } catch (error) { res.status(500).json({error: "Failed to generate AI insights."}); }
+    res.json(payload);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
-cron.schedule('0 10 1 * *', async () => {
-  try {
-    const reports = await generateMonthlyReportData();
-    const date = new Date(); date.setMonth(date.getMonth() - 1); 
-    const lastMonthStr = date.toISOString().slice(0, 7);
-    const report = reports.find(r => r.month === lastMonthStr);
-    
-    if (report) {
-      const existing = await pool.query('SELECT insights FROM ai_monthly_insights WHERE month = $1', [lastMonthStr]);
-      if (existing.rows.length === 0) {
-        const userRes = await pool.query('SELECT username FROM users ORDER BY id ASC LIMIT 1');
-        const clientName = userRes.rows.length > 0 ? userRes.rows[0].username : 'Valued Client';
+const runHistoricalBackfill = async () => {};
 
-        const promptBrief = `
-          You are Vittaparāmarśadātā, an elite AI financial advisor built into the Dhanapālana platform.
-          Analyze the finalized financial data for ${lastMonthStr}.
-          
-          CRITICAL RULE: The client's name is ${clientName}. Address the client directly using their name, "you", and "your". Refer to yourself as "I" or "Vittaparāmarśadātā". Do NOT say the data belongs to Vittaparāmarśadātā.
+app.post('/api/reports/analyze/:month', async (req, res) => { res.status(410).json({ error: 'AI insights have been removed.' }); });
 
-          DATA SUMMARY:
-          - Net Cash Flow: $${parseFloat(report.net || 0).toFixed(2)} (Savings Rate: ${report.savingsRate || 0}%)
-          - Total Income: $${parseFloat(report.income || 0).toFixed(2)}
-          - Total Expenses: $${parseFloat(report.expense || 0).toFixed(2)}
-          - Expense Growth vs Last Month: ${report.expenseGrowth || 0}%
+cron.schedule('0 10 1 * *', async () => {});
 
-          CATEGORY CHANGES (VS LAST MONTH):
-          ${report.catComparison && report.catComparison.length > 0 ? report.catComparison.slice(0,4).map(c => `- ${c.category}: You spent $${c.current} (Difference: ${c.diff > 0 ? '+' : ''}$${c.diff} / ${c.pct}% change)`).join('\n') : 'No comparison data.'}
-
-          Please provide your response in 3 brief sections:
-          1. Executive Summary (2 sentences max).
-          2. Specific Observations.
-          3. Actionable Recommendation.
-        `;
-
-        const aiResult = await generateText({ model: ollama('vault-coder'), prompt: promptBrief, system: "You are Vittaparāmarśadātā, a professional financial advisor. Speak directly to the client." });
-        await pool.query('INSERT INTO ai_monthly_insights (month, insights) VALUES ($1, $2)', [lastMonthStr, aiResult.text]);
-      }
-
-      const topCategories = report.catComparison.slice(0, 3).map(c => `  - ${c.category}: C$${c.current.toFixed(0)}`).join('\n');
-      const isPositive = report.net >= 0;
-      const text = `📊 *Vault Monthly Report: ${lastMonthStr}*\n\n💰 *Total Inflow:* C$${report.income.toLocaleString('en-US', { minimumFractionDigits: 2 })}\n📉 *Total Expenses:* C$${report.expense.toLocaleString('en-US', { minimumFractionDigits: 2 })}\n${isPositive ? '🟢' : '🔴'} *Net Flow:* C$${report.net.toLocaleString('en-US', { minimumFractionDigits: 2 })}\n🎯 *Savings Rate:* ${report.savingsRate}%\n\n_Top 3 Expenses:_\n${topCategories}\n\n🤖 *Vittaparāmarśadātā has analyzed your month.* Log in to view or download your official PDF report!`;
-      await sendTelegramMessage(text);
-    }
-  } catch (err) {}
-});
-
-cron.schedule('0 2 * * *', async () => {
-  try {
-    logger.info('Initiating Nightly AI Sweep for missing historical reports...');
-    await runHistoricalBackfill();
-  } catch (e) {}
-});
+cron.schedule('0 2 * * *', async () => {});
 
 // ==========================================
-// DASHBOARD & TELEGRAM AI
+// DASHBOARD SUMMARY
 // ==========================================
 
 app.get('/api/dashboard/summary', async (req, res) => {
@@ -1407,395 +1627,7 @@ app.get('/api/dashboard/summary', async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'Server error' }); }
 });
 
-// ==========================================
-// AI QUERY DESIGNER — CRUD + GENERATE + TEST
-// ==========================================
-
-// List all examples
-app.get('/api/ai-examples', isAdmin, async (req, res) => {
-  try { res.json((await pool.query('SELECT * FROM ai_query_examples ORDER BY id')).rows); }
-  catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-// Create new example
-app.post('/api/ai-examples', isAdmin, async (req, res) => {
-  const { question, sql_query, description } = req.body;
-  if (!question || !sql_query) return res.status(400).json({ error: 'question and sql_query are required.' });
-  try {
-    const r = await pool.query('INSERT INTO ai_query_examples (question, sql_query, description) VALUES ($1, $2, $3) RETURNING *', [question.trim(), sql_query.trim(), (description || '').trim()]);
-    await logAction(`AI Query Example added: "${question.trim().substring(0, 60)}"`);
-    res.json(r.rows[0]);
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-// Update existing example
-app.put('/api/ai-examples/:id', isAdmin, async (req, res) => {
-  const { question, sql_query, description } = req.body;
-  if (!question || !sql_query) return res.status(400).json({ error: 'question and sql_query are required.' });
-  try {
-    const r = await pool.query('UPDATE ai_query_examples SET question=$1, sql_query=$2, description=$3, updated_at=NOW() WHERE id=$4 RETURNING *', [question.trim(), sql_query.trim(), (description || '').trim(), req.params.id]);
-    if (r.rows.length === 0) return res.status(404).json({ error: 'Example not found.' });
-    await logAction(`AI Query Example updated: ID ${req.params.id}`);
-    res.json(r.rows[0]);
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-// Delete example
-app.delete('/api/ai-examples/:id', isAdmin, async (req, res) => {
-  try {
-    const r = await pool.query('DELETE FROM ai_query_examples WHERE id=$1 RETURNING question', [req.params.id]);
-    if (r.rows.length === 0) return res.status(404).json({ error: 'Example not found.' });
-    await logAction(`AI Query Example deleted: ID ${req.params.id} ("${r.rows[0].question.substring(0, 60)}")`);
-    res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-// Generate SQL from a plain-English question using the AI model
-app.post('/api/ai-examples/generate', isAdmin, async (req, res) => {
-  const { question } = req.body;
-  if (!question) return res.status(400).json({ error: 'question is required.' });
-  try {
-    const now = new Date();
-    const today = now.toISOString().split('T')[0];
-    const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
-    const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString().split('T')[0];
-    const lastMonthEnd   = new Date(now.getFullYear(), now.getMonth(), 0).toISOString().split('T')[0];
-    const lastToLastStart = new Date(now.getFullYear(), now.getMonth() - 2, 1).toISOString().split('T')[0];
-    const lastToLastEnd   = new Date(now.getFullYear(), now.getMonth() - 1, 0).toISOString().split('T')[0];
-
-    let validCategories = '';
-    try { const c = await pool.query('SELECT name FROM categories'); validCategories = c.rows.map(r => r.name).join(', '); } catch(_) {}
-
-    const schemaCtx = `categories(id,name), banks(id,name), savings_accounts(id,bank_id,account_type_id,currency,balance), income(id,source,amount,account_id,date), expenses(id,amount,category_id,account_id,credit_card_id,date,description), transfers(id,source_account_id,recipient,recipient_bank_id,amount,exchange_rate,inr_amount,method,date), lending(id,source_account_id,recipient,recipient_bank_id,amount,method,repaid,date). Valid category names: ${validCategories}.`;
-    const genPrompt = `You are a PostgreSQL expert. Convert the question into a single valid SQL SELECT and output ONLY the raw SQL, no fences, no semicolons.\nSchema: ${schemaCtx}\nDate context — today: ${today}, this month: ${thisMonthStart} to ${today}, last month: ${lastMonthStart} to ${lastMonthEnd}, last-to-last month: ${lastToLastStart} to ${lastToLastEnd}.\nRules: use COALESCE(SUM,0) for totals; use ORDER BY amount DESC LIMIT N for biggest/top queries; resolve category names via subquery with ILIKE; use INTERVAL for rolling periods.`;
-
-    const extractSql = (text) => {
-      if (!text) return '';
-      const cleaned = String(text).replace(/```sql|```/gi, ' ').trim();
-      const selectMatch = cleaned.match(/select[\s\S]*/i);
-      return (selectMatch ? selectMatch[0] : cleaned).replace(/;\s*$/, '').trim();
-    };
-
-    let sql = '';
-    const firstTry = await generateText({ model: ollama('vault-coder'), system: genPrompt, prompt: question });
-    sql = extractSql(firstTry.text);
-
-    // Fallback: use a single, few-shot prompt block when the first call returns empty.
-    if (!sql) {
-      const exRows = (await pool.query('SELECT question, sql_query FROM ai_query_examples ORDER BY id LIMIT 12')).rows;
-      const examples = exRows.map(e => `Q: ${e.question}\nSQL: ${e.sql_query}`).join('\n\n');
-      const fallbackPrompt = `Generate ONE PostgreSQL SELECT query for the question below.\nReturn only SQL (no markdown, no commentary).\n\nSchema: ${schemaCtx}\nDate values: TODAY=${today}, THIS_MONTH_START=${thisMonthStart}, LAST_MONTH_START=${lastMonthStart}, LAST_MONTH_END=${lastMonthEnd}, LAST_TO_LAST_START=${lastToLastStart}, LAST_TO_LAST_END=${lastToLastEnd}.\n\nExamples:\n${examples}\n\nQuestion: ${question}`;
-      const secondTry = await generateText({ model: ollama('vault-coder'), prompt: fallbackPrompt });
-      sql = extractSql(secondTry.text);
-    }
-
-    if (!sql) return res.status(500).json({ error: 'AI returned an empty response. Try rephrasing the question, or write the SQL manually.' });
-
-    // Convert concrete dates back to placeholders so the example stays valid every month
-    sql = sql.replace(new RegExp(thisMonthStart, 'g'), '{THIS_MONTH_START}')
-             .replace(new RegExp(today, 'g'), '{TODAY}')
-             .replace(new RegExp(lastMonthStart, 'g'), '{LAST_MONTH_START}')
-             .replace(new RegExp(lastMonthEnd, 'g'), '{LAST_MONTH_END}')
-             .replace(new RegExp(lastToLastStart, 'g'), '{LAST_TO_LAST_START}')
-             .replace(new RegExp(lastToLastEnd, 'g'), '{LAST_TO_LAST_END}');
-    res.json({ sql });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-// Test a SQL query against the live DB (SELECT only — safety enforced)
-app.post('/api/ai-examples/test', isAdmin, async (req, res) => {
-  let { sql } = req.body;
-  if (!sql) return res.status(400).json({ error: 'sql is required.' });
-
-  // Replace date placeholders with today's actual values before running
-  const now = new Date();
-  const today = now.toISOString().split('T')[0];
-  const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
-  const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString().split('T')[0];
-  const lastMonthEnd   = new Date(now.getFullYear(), now.getMonth(), 0).toISOString().split('T')[0];
-  const lastToLastStart = new Date(now.getFullYear(), now.getMonth() - 2, 1).toISOString().split('T')[0];
-  const lastToLastEnd   = new Date(now.getFullYear(), now.getMonth() - 1, 0).toISOString().split('T')[0];
-  sql = sql.replace(/{TODAY}/g, today).replace(/{THIS_MONTH_START}/g, thisMonthStart)
-           .replace(/{LAST_MONTH_START}/g, lastMonthStart).replace(/{LAST_MONTH_END}/g, lastMonthEnd)
-           .replace(/{LAST_TO_LAST_START}/g, lastToLastStart).replace(/{LAST_TO_LAST_END}/g, lastToLastEnd);
-
-  // Only allow SELECT statements — refuse anything that could modify data
-  const normalizedSql = sql.trim().toUpperCase();
-  if (!/^\s*SELECT\b/i.test(normalizedSql) || /\b(INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER|GRANT|REVOKE|EXEC|EXECUTE)\b/i.test(normalizedSql)) {
-    return res.status(400).json({ error: 'Only SELECT queries are allowed in the test runner.' });
-  }
-  try {
-    const result = await pool.query(sql + ' LIMIT 20');
-    res.json({ rows: result.rows, rowCount: result.rowCount });
-  } catch (err) { res.status(400).json({ error: err.message }); }
-});
-
-// DB schema browser — returns tables + columns for the SQL editor helper panel
-app.get('/api/ai-schema', isAdmin, async (req, res) => {
-  try {
-    const r = await pool.query(`SELECT table_name, column_name, data_type FROM information_schema.columns WHERE table_schema = 'public' AND table_name IN ('categories','banks','savings_accounts','income','expenses','transfers','lending','credit_cards','recipient_banks','account_types') ORDER BY table_name, ordinal_position`);
-    const schema = {};
-    r.rows.forEach(row => {
-      if (!schema[row.table_name]) schema[row.table_name] = [];
-      schema[row.table_name].push({ column: row.column_name, type: row.data_type });
-    });
-    res.json(schema);
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.post('/api/telegram/webhook', async (req, res) => {
-  const message = req.body.message;
-  if (!message || !message.text) return res.sendStatus(200);
-
-  let authorizedChatId = process.env.TELEGRAM_CHAT_ID;
-  try {
-    const settings = await pool.query("SELECT value FROM system_settings WHERE key = 'TELEGRAM_CHAT_ID'");
-    if (settings.rows.length > 0) authorizedChatId = settings.rows[0].value;
-  } catch(e) {}
-
-  if (message.chat.id.toString() !== authorizedChatId.toString()) return res.sendStatus(200); 
-
-  const userQuery = message.text;
-  const chatId = message.chat.id.toString();
-
-  // Allow the user to clear conversation history with /reset
-  if (userQuery.trim().toLowerCase() === '/reset') {
-    conversationHistories.delete(chatId);
-    res.status(200).send('OK');
-    await sendTelegramMessage("Conversation history cleared. Starting fresh! 🔄");
-    return;
-  }
-
-  res.status(200).send('OK');
-  const chatHistoryEntry = getConversationHistory(chatId);
-  console.log(`\n🔔 [TELEGRAM] Received message: "${userQuery}"`);
-
-  try {
-    let token = process.env.TELEGRAM_BOT_TOKEN;
-    const settings = await pool.query("SELECT value FROM system_settings WHERE key = 'TELEGRAM_BOT_TOKEN'");
-    if (settings.rows.length > 0) token = settings.rows[0].value;
-    await axios.post(`https://api.telegram.org/bot${token}/sendChatAction`, { chat_id: authorizedChatId, action: 'typing' });
-  } catch (err) {}
-
-  try {
-    const now = new Date();
-    const today = now.toISOString().split('T')[0];
-    const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
-    const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString().split('T')[0];
-    const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0).toISOString().split('T')[0];
-    const lastToLastMonthStart = new Date(now.getFullYear(), now.getMonth() - 2, 1).toISOString().split('T')[0];
-    const lastToLastMonthEnd = new Date(now.getFullYear(), now.getMonth() - 1, 0).toISOString().split('T')[0];
-
-    let validCategories = "Unknown";
-    try {
-      const catRes = await pool.query('SELECT name FROM categories');
-      validCategories = catRes.rows.map(r => `'${r.name}'`).join(', ');
-    } catch(e) {}
-
-    const schemaString = `
-      - categories (id, name)  [VALID NAMES: ${validCategories}]
-      - banks (id, name)
-      - savings_accounts (id, bank_id, account_type_id, currency, balance)
-      - income (id, source, amount, account_id, date)
-      - expenses (id, amount, category_id, account_id, credit_card_id, date, description)
-      - transfers (id, source_account_id, recipient, recipient_bank_id, amount, exchange_rate, inr_amount, method, date)
-      - lending (id, source_account_id, recipient, recipient_bank_id, amount, method, repaid, date)
-    `;
-
-    const normalizedUserQuery = (userQuery || '').toLowerCase();
-
-    // ── AI Pass 1: generate SQL from natural language ──────────────────────────
-    console.log("🤖 [AI Pass 1] Generating SQL...");
-
-    // Load few-shot examples from DB (managed via Admin → AI Query Designer).
-    // SQL values stored with date placeholders; replace them with today's computed values.
-    const replaceDatePlaceholders = (sql) => sql
-      .replace(/{TODAY}/g, today)
-      .replace(/{THIS_MONTH_START}/g, thisMonthStart)
-      .replace(/{LAST_MONTH_START}/g, lastMonthStart)
-      .replace(/{LAST_MONTH_END}/g, lastMonthEnd)
-      .replace(/{LAST_TO_LAST_START}/g, lastToLastMonthStart)
-      .replace(/{LAST_TO_LAST_END}/g, lastToLastMonthEnd);
-
-    let examplesSection = '';
-    try {
-      const exRows = (await pool.query('SELECT question, sql_query FROM ai_query_examples ORDER BY id')).rows;
-      if (exRows.length > 0) {
-        examplesSection = '\n\nEXAMPLES:\n\n' + exRows.map(e => `Q: ${e.question}\nSQL: ${replaceDatePlaceholders(e.sql_query)}`).join('\n\n');
-      }
-    } catch (_) { /* examples unavailable — model works on rules alone */ }
-
-    const sqlPrompt = `You are a PostgreSQL expert embedded in a personal finance app. Your ONLY job is to convert the user's question into a single valid SQL SELECT statement.
-
-DATABASE SCHEMA:
-${schemaString}
-
-DATE CONTEXT (use these exact values — do not calculate):
-- Today: ${today}
-- This month: ${thisMonthStart} to ${today}
-- Last month: ${lastMonthStart} to ${lastMonthEnd}
-- Last to last month / two months ago: ${lastToLastMonthStart} to ${lastToLastMonthEnd}
-
-OUTPUT RULES:
-1. Output ONLY the raw SQL query. No explanations, no markdown, no code fences, no semicolons.
-2. Always use COALESCE(SUM(amount), 0) for totals so zero is returned instead of NULL.
-3. Foreign key columns (category_id, account_id, bank_id) are integers — always resolve category/bank names via subquery with ILIKE '%...%'.
-4. For "biggest", "largest", "highest", "top N" queries use ORDER BY amount DESC LIMIT N — never use SUM for these.
-5. For rolling periods ("last X months", "past X days", "last year") use PostgreSQL INTERVAL syntax.
-6. If the question is vague about time, default to this month.${examplesSection}`;
-
-    // Pass recent exchanges so model can resolve follow-up questions like "what about last month?"
-    const recentContext = chatHistoryEntry.messages.slice(-6);
-    const sqlResult = await generateText({
-      model: ollama('vault-coder'),
-      system: sqlPrompt,
-      messages: [
-        ...recentContext,
-        { role: 'user', content: userQuery }
-      ]
-    });
-
-    let generatedText = sqlResult.text;
-    console.log(`🤖 [AI Pass 1] Raw output: "${generatedText.substring(0, 300)}"`);
-
-    const extractSqlCandidate = (text) => {
-      const fenced = text.match(/```sql\s*([\s\S]*?)\s*```/i) || text.match(/```\s*([\s\S]*?)\s*```/i);
-      const candidate = fenced ? fenced[1].trim() : text.trim();
-      return candidate.replace(/;\s*$/, '');
-    };
-
-    let sqlQuery = extractSqlCandidate(generatedText);
-
-    // Repair pass: if model returned prose instead of SQL, ask it to self-correct
-    if (!/\bSELECT\b/i.test(sqlQuery)) {
-      console.log("⚠️ [AI Pass 1] No SELECT found, attempting repair...");
-      const repairResult = await generateText({
-        model: ollama('vault-coder'),
-        system: `You are a PostgreSQL query rewriter. Return exactly ONE valid SELECT statement and nothing else. No markdown, no explanations, no semicolons. Use only these tables: categories, savings_accounts, income, expenses, transfers, lending. Resolve category/bank names via subquery with ILIKE.`,
-        messages: [{ role: 'user', content: `Question: ${userQuery}\n\nBad output to fix:\n${generatedText}\n\nReturn only the SQL SELECT:` }]
-      });
-      sqlQuery = extractSqlCandidate(repairResult.text);
-      console.log(`⚠️ [AI Repair] Output: "${sqlQuery.substring(0, 300)}"`);
-    }
-
-    if (!/\bSELECT\b/i.test(sqlQuery)) {
-      const useLastMonth = /(last\s*month|last\s*months)/i.test(normalizedUserQuery);
-      const rangeStart = useLastMonth ? lastMonthStart : thisMonthStart;
-      const rangeEnd = useLastMonth ? lastMonthEnd : today;
-      sqlQuery = `SELECT COALESCE(SUM(amount), 0) AS total_expense
-FROM expenses
-WHERE date >= '${rangeStart}'
-AND date <= '${rangeEnd}'`;
-    }
-
-    console.log(`💾 [DB] Executing Query: ${sqlQuery.replace(/\n/g, ' ')}`);
-    let dbData = [];
-    try { 
-      const result = await pool.query(sqlQuery);
-      dbData = result.rows;
-    } catch (dbErr) {
-      console.error(`❌ [DB ERROR]: ${dbErr.message}`);
-      await sendTelegramMessage(`My database encountered an error understanding that request: ${dbErr.message}`);
-      return;
-    }
-
-    // Build a natural language response directly from the DB data.
-    // vault-coder is SQL-tuned and returns empty for prose synthesis, so we format directly.
-    const fmtAmount = (v) => {
-      const n = parseFloat(v);
-      return isNaN(n) ? String(v) : `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-    };
-    const fmtDate = (v) => {
-      try { return new Date(v).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }); } catch (_) { return String(v); }
-    };
-    const q = normalizedUserQuery;
-
-    let finalMessage = '';
-    if (!dbData || dbData.length === 0) {
-      finalMessage = "Good news! I checked your records and found no matching entries for that period. 🎉";
-    } else if (dbData.length > 1) {
-      // Multi-row list
-      const lines = dbData.map((r, i) => {
-        const parts = Object.entries(r).map(([k, v]) => {
-          if (/amount|total|sum/i.test(k)) return fmtAmount(v);
-          if (/date/i.test(k)) return fmtDate(v);
-          return String(v || '');
-        });
-        return `${i + 1}. ${parts.filter(Boolean).join(' | ')}`;
-      });
-      finalMessage = `Here's what I found for you 📊:\n\n${lines.join('\n')}`;
-    } else {
-      const row = dbData[0];
-      const keys = Object.keys(row);
-      // Income + expense summary (two column pattern)
-      const incomeKey = keys.find(k => /income/i.test(k));
-      const expenseKey = keys.find(k => /expense/i.test(k));
-      if (incomeKey && expenseKey) {
-        const income = parseFloat(row[incomeKey]) || 0;
-        const expense = parseFloat(row[expenseKey]) || 0;
-        const net = income - expense;
-        const netStr = net >= 0 ? `a surplus of ${fmtAmount(net)} 📈` : `a deficit of ${fmtAmount(Math.abs(net))} 📉`;
-        finalMessage = `Here's your financial summary 📊:\n\n💰 Total Income: ${fmtAmount(income)}\n💸 Total Expenses: ${fmtAmount(expense)}\n📊 Net: ${netStr}`;
-      // Biggest/top expense with description/date/category
-      } else if (/biggest|largest|highest|top|maximum/i.test(q) && keys.length > 1) {
-        const amount = row[keys.find(k => /amount/i.test(k))];
-        const desc = row[keys.find(k => /desc/i.test(k))] || null;
-        const category = row[keys.find(k => /cat/i.test(k))] || null;
-        const date = row[keys.find(k => /date/i.test(k))] || null;
-        let msg = `Your biggest expense was ${fmtAmount(amount)} 💸`;
-        if (desc) msg += ` for "${desc}"`;
-        if (category) msg += ` (${category})`;
-        if (date) msg += ` on ${fmtDate(date)}`;
-        finalMessage = msg + '.';
-      // Single aggregate column
-      } else if (keys.length === 1) {
-        const val = parseFloat(row[keys[0]]) || 0;
-        const key = keys[0].toLowerCase();
-        if (val === 0) {
-          finalMessage = /income/i.test(key) || /income/i.test(q)
-            ? 'I checked your records and found no income entries for that period. 📊'
-            : 'Good news! I checked your records and found no expenses for that period. 🎉';
-        } else if (/income/i.test(key)) {
-          finalMessage = `Your total income for that period was ${fmtAmount(val)}. 💰`;
-        } else {
-          const label = /grocery|groceries/i.test(q) ? 'grocery expenses' : 'expenses';
-          finalMessage = `I checked your records, and your total ${label} came to ${fmtAmount(val)}. 💸`;
-        }
-      // Generic single row with multiple columns
-      } else {
-        const parts = keys.map(k => {
-          const v = row[k];
-          if (/amount|total|sum|balance/i.test(k)) return `${k.replace(/_/g,' ')}: ${fmtAmount(v)}`;
-          if (/date/i.test(k)) return `${k.replace(/_/g,' ')}: ${fmtDate(v)}`;
-          return `${k.replace(/_/g,' ')}: ${v}`;
-        });
-        finalMessage = `Here are the details I found 📊:\n${parts.join('\n')}`;
-      }
-    }
-    console.log(`📨 [RESPONSE] ${finalMessage.substring(0, 120)}`);
-
-    // Persist this exchange so future messages have context
-    appendToConversation(chatId, userQuery, finalMessage);
-
-    try { await sendTelegramMessage(finalMessage); } catch (telegramErr) {}
-    return; 
-
-  } catch (error) {
-    console.error("❌ [AI ERROR]:", error);
-    await sendTelegramMessage(`🚨 System Alert: AI Engine encountered an error.`);
-    return; 
-  }
-});
-
 const PORT = 5000;
 app.listen(PORT, async () => { 
   logger.info(`Security Core Online on port ${PORT}`); 
-  try {
-    const settings = await pool.query("SELECT key, value FROM system_settings WHERE key IN ('NGROK_TOKEN', 'TELEGRAM_BOT_TOKEN')");
-    const map = {}; settings.rows.forEach(r => map[r.key] = r.value);
-    if (map['NGROK_TOKEN']) {
-      await initializeTunnel(map['NGROK_TOKEN'], map['TELEGRAM_BOT_TOKEN']);
-    }
-    setTimeout(runHistoricalBackfill, 5000);
-  } catch(e) {}
 });

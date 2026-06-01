@@ -3,7 +3,7 @@
 #
 # This docker-compose.yml file defines the complete containerized architecture
 # for the Dhanapālana personal finance application. It orchestrates multiple
-# services including frontend, backend, database, AI engine, and reverse proxy.
+# services including frontend, backend, database, and reverse proxy.
 #
 # ARCHITECTURAL OVERVIEW:
 # - Multi-service containerized application
@@ -23,18 +23,16 @@
 # frontend: React.js web application (port 3000 internal)
 # backend: Express.js API server with Docker management capabilities
 # db: PostgreSQL 13 database with persistent storage
-# ollama: Local AI model server with custom fine-tuned model
 # nginx: Reverse proxy with SSL termination and load balancing
 #
 # NETWORK SEGMENTS:
 # edge_net: External access network (internet-facing)
 # app_net: Application services network (frontend, backend, nginx)
-# airgap_net: Isolated internal network (backend, db, ollama only)
+# airgap_net: Isolated internal network (backend and db only)
 #
 # DATA PERSISTENCE:
 # vault_pgdata: PostgreSQL database files
 # vault_backups: Automated backup storage
-# ollama_data: AI model storage and cache
 #
 # DEPLOYMENT NOTES:
 # - Requires .env file with DB_USER, DB_PASSWORD, DB_NAME
@@ -51,6 +49,7 @@ services:
     build: ./frontend
     container_name: vault_frontend
     environment:
+      - TZ=${APP_TIMEZONE:-America/Toronto}
       - CHOKIDAR_USEPOLLING=true  # Enable polling for file watching in containers
     restart: unless-stopped
     networks:
@@ -65,7 +64,7 @@ services:
     container_name: vault_backend
     user: root  # Required for Docker socket access and system operations
     environment:
-      - TZ=America/Toronto  # System timezone
+      - TZ=${APP_TIMEZONE:-America/Toronto}  # System timezone
       - DB_USER=${DB_USER}  # Database credentials from environment
       - DB_PASSWORD=${DB_PASSWORD}
       - DB_NAME=${DB_NAME}
@@ -88,7 +87,7 @@ services:
     container_name: vault_db
     restart: unless-stopped
     environment:
-      - TZ=America/Toronto  # Consistent timezone
+      - TZ=${APP_TIMEZONE:-America/Toronto}  # Consistent timezone
       - POSTGRES_USER=${DB_USER}
       - POSTGRES_PASSWORD=${DB_PASSWORD}
       - POSTGRES_DB=${DB_NAME}
@@ -97,40 +96,13 @@ services:
     networks:
       - airgap_net  # Isolated network, no external access
 
-  # AI SERVICE: Ollama with Custom Model
-  # Local AI model server with fine-tuned coding assistant
-  ollama:
-    image: ollama/ollama:latest
-    container_name: vault_ollama
-    tty: true  # Required for interactive shell operations
-    volumes:
-      - ollama_data:/root/.ollama  # AI model storage
-      - "./vault_ai/model_build:/models:ro"  # Local model files and Modelfile
-    entrypoint: /bin/sh
-    command:
-      - "-c"
-      - |
-        ollama serve &  # Start Ollama server in background
-        echo "Waiting for Ollama internal API..."
-        sleep 5  # Allow server to initialize
-        cd /models
-        if ollama list | grep -q "vault-coder"; then
-          echo "Model 'vault-coder' already exists. Skipping build."
-        else
-          echo "Building 'vault-coder' from Modelfile..."
-          ollama create vault-coder -f Modelfile  # Build custom model
-        fi
-        echo "AI Engine is fully operational."
-        wait  # Keep container running
-    networks:
-      - airgap_net  # Isolated network for security
-    restart: unless-stopped
-
   # REVERSE PROXY: Nginx with SSL Termination
   # Handles external traffic, SSL, and load balancing
   nginx:
     image: nginx:alpine
     container_name: vault_nginx
+    environment:
+      - TZ=${APP_TIMEZONE:-America/Toronto}
     ports:
       - "80:80"    # HTTP port
       - "443:443"  # HTTPS port
@@ -150,8 +122,6 @@ volumes:
   vault_pgdata:    # PostgreSQL database files
     name: vault_pgdata
     external: false
-  ollama_data:     # AI model data and cache
-    name: vault_ollama_data
   vault_backups:   # Automated backup files
     name: vault_backups
 

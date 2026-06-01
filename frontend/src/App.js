@@ -9,7 +9,6 @@
  * - React Router for client-side navigation
  * - JWT-based authentication with automatic logout
  * - Real-time notifications system
- * - Dark/Light theme support with localStorage persistence
  * - Responsive glass-morphism UI design
  * - Axios HTTP client with automatic token injection
  *
@@ -21,12 +20,11 @@
  *
  * STATE MANAGEMENT:
  * - Token state for authentication status
- * - Theme state with localStorage persistence
  * - Username persistence for UI display
  *
  * UI COMPONENTS:
  * - MainLayout: Core application layout with sidebar navigation
- * - TopHeader: Header with theme toggle and notifications
+ * - TopHeader: Header with notifications
  * - AutoLogout: Invisible security component for session management
  * - NavItem: Reusable navigation link component
  *
@@ -40,7 +38,6 @@
  * - Backend API endpoints for all financial operations
  * - Local storage for session persistence
  * - Real-time notification polling
- * - Theme persistence across sessions
  */
 
 import React, { useState, useEffect } from 'react';
@@ -62,120 +59,15 @@ import Lending from './Lending';
 import Admin from './Admin';
 import Reports from './Reports';
 import DataManagement from './DataManagement'; // ADDED NEW IMPORT
-
-/**
- * LIGHT THEME CSS OVERRIDE
- * Dynamically injected when light theme is active
- * Overrides dark theme defaults with light color scheme
- * Uses CSS custom properties for consistent theming
- */
-const lightThemeCSS = `
-  body {
-    background: #f1f5f9 !important;
-    color: #334155 !important;
-  }
-  .glass-panel {
-    background: #ffffff !important;
-    border: none !important;
-    box-shadow: 0 10px 40px -10px rgba(0,0,0,0.08) !important;
-  }
-  .glass-card {
-    background: #ffffff !important;
-    border-right: 1px solid #f1f5f9 !important;
-    border-bottom: 1px solid #f1f5f9 !important;
-    border-left: 1px solid #f1f5f9 !important;
-    box-shadow: 0 4px 6px -1px rgba(0,0,0,0.03), 0 2px 4px -1px rgba(0,0,0,0.02) !important;
-    border-radius: 12px !important;
-  }
-  .glass-card:hover {
-    box-shadow: 0 10px 20px -3px rgba(0,0,0,0.06), 0 4px 6px -2px rgba(0,0,0,0.03) !important;
-    transform: translateY(-2px) !important;
-  }
-  h1, h2, h3, h4, h5, strong { color: #0f172a !important; }
-  p, small, span.text-muted { color: #64748b !important; }
-  .nav-link { color: #64748b !important; font-weight: 500 !important; }
-  .nav-link:hover, .nav-link.active {
-    background: #f8fafc !important;
-    color: #0284c7 !important;
-    font-weight: 600 !important;
-    box-shadow: inset 3px 0 0 #0284c7 !important;
-  body {
-    background: #f1f5f9 !important; 
-    color: #334155 !important;
-  }
-  .glass-panel {
-    background: #ffffff !important;
-    border: none !important; 
-    box-shadow: 0 10px 40px -10px rgba(0,0,0,0.08) !important;
-  }
-  .glass-card {
-    background: #ffffff !important;
-    border-right: 1px solid #f1f5f9 !important;
-    border-bottom: 1px solid #f1f5f9 !important;
-    border-left: 1px solid #f1f5f9 !important;
-    box-shadow: 0 4px 6px -1px rgba(0,0,0,0.03), 0 2px 4px -1px rgba(0,0,0,0.02) !important;
-    border-radius: 12px !important;
-  }
-  .glass-card:hover {
-    box-shadow: 0 10px 20px -3px rgba(0,0,0,0.06), 0 4px 6px -2px rgba(0,0,0,0.03) !important;
-    transform: translateY(-2px) !important;
-  }
-  h1, h2, h3, h4, h5, strong { color: #0f172a !important; }
-  p, small, span.text-muted { color: #64748b !important; }
-  .nav-link { color: #64748b !important; font-weight: 500 !important; }
-  .nav-link:hover, .nav-link.active {
-    background: #f8fafc !important;
-    color: #0284c7 !important;
-    font-weight: 600 !important;
-    box-shadow: inset 3px 0 0 #0284c7 !important;
-  }
-  .nav-section-title { color: #94a3b8 !important; font-weight: 700 !important; letter-spacing: 0.5px !important; }
-  .glass-input, select.glass-input {
-    background: #f8fafc !important;
-    border: 1px solid #e2e8f0 !important; 
-    color: #0f172a !important;
-    box-shadow: inset 0 1px 2px rgba(0,0,0,0.01) !important;
-    border-radius: 8px !important;
-    box-sizing: border-box !important; 
-  }
-  .glass-input:focus {
-    background: #ffffff !important;
-    border-color: #3b82f6 !important;
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1) !important;
-    outline: none !important;
-  }
-  .glass-button {
-    background: #ffffff !important;
-    color: #0f172a !important;
-    border: 1px solid #e2e8f0 !important;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.03) !important;
-    font-weight: 600 !important;
-  }
-  .glass-button:hover:not(:disabled) {
-    background: #f8fafc !important;
-    border-color: #cbd5e1 !important;
-    box-shadow: 0 4px 6px rgba(0,0,0,0.04) !important;
-  }
-  .glass-button-warning { background: #fffbeb !important; border-color: transparent !important; color: #b45309 !important; }
-  .glass-button-danger { background: #fef2f2 !important; border-color: transparent !important; color: #b91c1c !important; }
-  .text-gradient-primary {
-    background: linear-gradient(90deg, #0284c7, #2563eb) !important;
-    -webkit-background-clip: text !important;
-    -webkit-text-fill-color: transparent !important;
-  }
-  .aurora-bg { display: none !important; }
-`;
+import DialogHost from './DialogHost';
+import { showConfirm } from './dialogService';
 
 /**
  * ICON COMPONENTS
  * SVG icon definitions for UI elements
  * Optimized for pixel-perfect rendering at 18x18px
- * MoonIcon: Dark theme indicator
- * SunIcon: Light theme indicator
  * BellIcon: Notifications indicator
  */
-const SunIcon = () => (<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>);
-const MoonIcon = () => (<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>);
 const BellIcon = () => (<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>);
 
 const DEFAULT_AUTO_LOGOUT_TIMEOUT_MINUTES = 15;
@@ -201,7 +93,7 @@ const NavItem = ({ to, children }) => {
 
 /**
  * TOPHEADER COMPONENT
- * Application header with theme toggle and notification system
+ * Application header with notification system
  * Features:
  * - Theme toggle button with smooth animations
  * - Real-time notification system with polling
@@ -216,10 +108,8 @@ const NavItem = ({ to, children }) => {
  * - Manual refresh capability for immediate updates
  *
  * @param {Object} props - Component props
- * @param {string} props.theme - Current theme ('dark' or 'light')
- * @param {Function} props.toggleTheme - Function to toggle theme
  */
-const TopHeader = ({ theme, toggleTheme }) => {
+const TopHeader = () => {
   // Notification state management with error resilience
   const [notifs, setNotifs] = useState([]);
   const [isOpen, setIsOpen] = useState(false);
@@ -262,7 +152,7 @@ const TopHeader = ({ theme, toggleTheme }) => {
   // Clear all notifications with confirmation
   const clearAll = async (e) => {
     e.stopPropagation();
-    if(!window.confirm("Permanently clear all notifications?")) return;
+    if(!(await showConfirm("Permanently clear all notifications?", { title: 'Clear Notifications' }))) return;
     try {
       await axios.delete(`/api/notifications/clear`);
       setNotifs([]);
@@ -275,34 +165,26 @@ const TopHeader = ({ theme, toggleTheme }) => {
   // Consistent button styling for header icons
   const iconBtnStyle = {
     width: '40px', height: '40px', borderRadius: '50%', padding: '0',
-    background: theme === 'dark' ? 'rgba(255,255,255,0.05)' : '#ffffff',
-    border: theme === 'dark' ? '1px solid rgba(255,255,255,0.08)' : '1px solid rgba(0,0,0,0.08)',
-    color: theme === 'dark' ? '#94a3b8' : '#64748b',
+    background: 'rgba(255,255,255,0.05)',
+    border: '1px solid rgba(255,255,255,0.08)',
+    color: '#94a3b8',
     display: 'flex', justifyContent: 'center', alignItems: 'center',
     cursor: 'pointer', transition: 'all 0.2s ease',
-    boxShadow: theme === 'light' ? '0 2px 5px rgba(0,0,0,0.05)' : 'none'
+    boxShadow: 'none'
   };
 
   return (
     <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', padding: '24px 40px 0', gap: '16px', position: 'relative', zIndex: 1000 }}>
-      {/* THEME TOGGLE BUTTON */}
-      <button onClick={toggleTheme} style={iconBtnStyle}
-        onMouseOver={e => { e.currentTarget.style.color = theme === 'dark' ? '#ffffff' : '#0f172a'; e.currentTarget.style.transform = 'scale(1.05)'; }}
-        onMouseOut={e => { e.currentTarget.style.color = theme === 'dark' ? '#94a3b8' : '#64748b'; e.currentTarget.style.transform = 'scale(1)'; }}
-      >
-        {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
-      </button>
-
       {/* NOTIFICATION DROPDOWN CONTAINER */}
       <div style={{ position: 'relative' }}>
-        <button onClick={handleToggleMenu} style={{ ...iconBtnStyle, color: (isOpen || unreadCount > 0) ? (theme === 'dark' ? '#ffffff' : '#0f172a') : iconBtnStyle.color }}
-          onMouseOver={e => { e.currentTarget.style.color = theme === 'dark' ? '#ffffff' : '#0f172a'; e.currentTarget.style.transform = 'scale(1.05)'; }}
-          onMouseOut={e => { e.currentTarget.style.color = (isOpen || unreadCount > 0) ? (theme === 'dark' ? '#ffffff' : '#0f172a') : (theme === 'dark' ? '#94a3b8' : '#64748b'); e.currentTarget.style.transform = 'scale(1)'; }}
+        <button onClick={handleToggleMenu} style={{ ...iconBtnStyle, color: (isOpen || unreadCount > 0) ? '#ffffff' : iconBtnStyle.color }}
+          onMouseOver={e => { e.currentTarget.style.color = '#ffffff'; e.currentTarget.style.transform = 'scale(1.05)'; }}
+          onMouseOut={e => { e.currentTarget.style.color = (isOpen || unreadCount > 0) ? '#ffffff' : '#94a3b8'; e.currentTarget.style.transform = 'scale(1)'; }}
         >
           <BellIcon />
           {/* UNREAD NOTIFICATION BADGE */}
           {unreadCount > 0 && (
-            <span style={{ position: 'absolute', top: '-4px', right: '-4px', background: '#ef4444', color: 'white', borderRadius: '50%', minWidth: '18px', height: '18px', fontSize: '10px', fontWeight: 'bold', display: 'flex', alignItems: 'center', justifyContent: 'center', border: theme === 'dark' ? '2px solid #0f0f14' : '2px solid #ffffff' }}>
+            <span style={{ position: 'absolute', top: '-4px', right: '-4px', background: '#ef4444', color: 'white', borderRadius: '50%', minWidth: '18px', height: '18px', fontSize: '10px', fontWeight: 'bold', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid #0f0f14' }}>
               {unreadCount > 9 ? '9+' : unreadCount}
             </span>
           )}
@@ -310,10 +192,10 @@ const TopHeader = ({ theme, toggleTheme }) => {
 
         {/* NOTIFICATION DROPDOWN PANEL */}
         {isOpen && (
-          <div style={{ position: 'absolute', right: 0, top: '50px', width: '360px', background: theme === 'dark' ? 'rgba(15, 15, 20, 0.95)' : '#ffffff', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', border: theme === 'dark' ? '1px solid rgba(255,255,255,0.08)' : '1px solid rgba(0,0,0,0.06)', borderRadius: '16px', boxShadow: theme === 'dark' ? '0 20px 40px rgba(0,0,0,0.7)' : '0 20px 40px rgba(0,0,0,0.08)', overflow: 'hidden' }}>
+          <div style={{ position: 'absolute', right: 0, top: '50px', width: '360px', background: 'rgba(15, 15, 20, 0.95)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '16px', boxShadow: '0 20px 40px rgba(0,0,0,0.7)', overflow: 'hidden' }}>
             {/* DROPDOWN HEADER */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', borderBottom: theme === 'dark' ? '1px solid rgba(255,255,255,0.05)' : '1px solid rgba(0,0,0,0.04)', background: theme === 'dark' ? 'rgba(255,255,255,0.02)' : '#f8fafc' }}>
-              <strong style={{ fontSize: '14px', color: theme === 'dark' ? 'white' : '#0f172a' }}>System Notifications</strong>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', borderBottom: '1px solid rgba(255,255,255,0.05)', background: 'rgba(255,255,255,0.02)' }}>
+              <strong style={{ fontSize: '14px', color: 'white' }}>System Notifications</strong>
               {safeNotifs.length > 0 && <button onClick={clearAll} style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '12px', cursor: 'pointer', fontWeight: 'bold', padding: '0' }}>Clear All</button>}
             </div>
 
@@ -323,12 +205,12 @@ const TopHeader = ({ theme, toggleTheme }) => {
                 <div style={{ padding: '40px 20px', textAlign: 'center', color: '#94a3b8', fontSize: '13px' }}>No new alerts.</div>
               ) : (
                 safeNotifs.map(n => (
-                  <div key={n.id} onClick={(e) => toggleRead(n.id, e)} style={{ padding: '16px 20px', borderBottom: theme === 'dark' ? '1px solid rgba(255,255,255,0.03)' : '1px solid rgba(0,0,0,0.03)', display: 'flex', gap: '14px', cursor: 'pointer', background: n.is_read ? 'transparent' : (theme === 'dark' ? 'rgba(16, 185, 129, 0.05)' : 'rgba(16, 185, 129, 0.08)'), transition: 'background 0.2s' }}>
+                  <div key={n.id} onClick={(e) => toggleRead(n.id, e)} style={{ padding: '16px 20px', borderBottom: '1px solid rgba(255,255,255,0.03)', display: 'flex', gap: '14px', cursor: 'pointer', background: n.is_read ? 'transparent' : 'rgba(16, 185, 129, 0.05)', transition: 'background 0.2s' }}>
                     {/* READ STATUS INDICATOR */}
                     <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: n.is_read ? 'transparent' : '#10b981', border: n.is_read ? '1px solid #94a3b8' : 'none', marginTop: '6px', flexShrink: 0 }}></div>
                     <div>
                       {/* NOTIFICATION MESSAGE */}
-                      <p style={{ margin: '0 0 6px 0', fontSize: '13px', color: n.is_read ? '#64748b' : (theme === 'dark' ? 'white' : '#0f172a'), lineHeight: '1.5' }}>{n.message}</p>
+                      <p style={{ margin: '0 0 6px 0', fontSize: '13px', color: n.is_read ? '#64748b' : 'white', lineHeight: '1.5' }}>{n.message}</p>
                       {/* TIMESTAMP */}
                       <span style={{ color: '#94a3b8', fontSize: '11px', fontWeight: 500 }}>{new Date(n.created_at).toLocaleString()}</span>
                     </div>
@@ -363,18 +245,16 @@ const TopHeader = ({ theme, toggleTheme }) => {
  * @param {Object} props - Component props
  * @param {string} props.username - Current user's username for display
  * @param {Function} props.handleLogout - Logout handler function
- * @param {string} props.theme - Current theme setting
- * @param {Function} props.toggleTheme - Theme toggle function
  */
-const MainLayout = ({ username, handleLogout, theme, toggleTheme }) => {
+const MainLayout = ({ username, handleLogout }) => {
   return (
     <div style={{ display: 'flex', height: '100vh', padding: '20px', gap: '20px', boxSizing: 'border-box' }}>
       {/* SIDEBAR NAVIGATION PANEL */}
       <div className="glass-panel" style={{ width: '260px', borderRadius: 'var(--radius-xl)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         {/* USER WELCOME HEADER */}
-        <div style={{ padding: '36px 24px', borderBottom: theme === 'dark' ? '1px solid rgba(255,255,255,0.05)' : '1px solid rgba(0,0,0,0.05)' }}>
+        <div style={{ padding: '36px 24px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
           <h2 style={{ margin: 0, fontSize: '1.8rem', letterSpacing: '-1px', fontWeight: 800 }} className="text-gradient-primary">Dhanapālana.</h2>
-          <p style={{ color: '#64748b', fontSize: '13px', margin: '8px 0 0 0' }}>Welcome back,<br/><strong style={{color: theme === 'dark' ? 'white' : '#0f172a', fontSize: '15px'}}>{username}</strong></p>
+          <p style={{ color: '#64748b', fontSize: '13px', margin: '8px 0 0 0' }}>Welcome back,<br/><strong style={{color: 'white', fontSize: '15px'}}>{username}</strong></p>
         </div>
 
         {/* NAVIGATION MENU */}
@@ -404,11 +284,11 @@ const MainLayout = ({ username, handleLogout, theme, toggleTheme }) => {
 
         {/* LOGOUT BUTTON */}
         <div style={{ padding: '24px' }}>
-          <button onClick={handleLogout} style={{ width: '100%', padding: '12px', background: theme === 'dark' ? 'transparent' : '#fef2f2', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: '8px', cursor: 'pointer', fontWeight: 600, transition: 'all 0.2s', fontSize: '14px' }}>Log Out</button>
+          <button onClick={handleLogout} style={{ width: '100%', padding: '12px', background: 'transparent', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: '8px', cursor: 'pointer', fontWeight: 600, transition: 'all 0.2s', fontSize: '14px' }}>Log Out</button>
         </div>
       </div>
-      <div className="glass-panel" style={{ flex: 1, borderRadius: 'var(--radius-xl)', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: theme === 'dark' ? 'rgba(15, 15, 20, 0.6)' : '#ffffff' }}>
-        <TopHeader theme={theme} toggleTheme={toggleTheme} />
+      <div className="glass-panel" style={{ flex: 1, borderRadius: 'var(--radius-xl)', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'rgba(15, 15, 20, 0.6)' }}>
+        <TopHeader />
         <div style={{ padding: '0 40px 40px', overflowY: 'auto', flex: 1, marginTop: '20px' }}>
           <Routes>
             <Route path="/" element={<Dashboard />} />
@@ -421,8 +301,8 @@ const MainLayout = ({ username, handleLogout, theme, toggleTheme }) => {
             <Route path="/transfers" element={<Transfers />} />
             <Route path="/lending" element={<Lending />} />
             <Route path="/admin" element={<Admin />} />
-            <Route path="/data-management" element={<DataManagement />} />
             <Route path="/reports" element={<Reports />} />
+            <Route path="/data-management" element={<DataManagement />} />
           </Routes>
         </div>
       </div>
@@ -486,7 +366,6 @@ function App() {
    * Root component managing global application state and routing
    * Features:
    * - Authentication state management with JWT tokens
-   * - Theme persistence and management (dark/light mode)
    * - Axios HTTP client configuration with automatic token injection
    * - Route protection and conditional rendering
    * - Auto-logout integration for security
@@ -494,7 +373,6 @@ function App() {
    *
    * STATE MANAGEMENT:
    * - token: JWT authentication token from localStorage
-   * - theme: UI theme preference ('dark' or 'light') with localStorage persistence
    * - username: Current user identifier for personalized UI display
    *
    * SECURITY FLOW:
@@ -503,18 +381,12 @@ function App() {
    * 3. Render Login component if no valid token exists
    * 4. Render MainLayout with auto-logout security if authenticated
    *
-   * THEME PERSISTENCE:
-   * - Stores theme preference in localStorage for cross-session consistency
-   * - Dynamically injects light theme CSS when light mode is active
-   * - Applies aurora background effect for visual appeal
-   *
    * ROUTING PROTECTION:
    * - Conditional rendering based on authentication status
    * - Automatic redirect to login for unauthenticated users
    * - Secure logout with complete localStorage cleanup
    */
   const [token, setToken] = useState(localStorage.getItem('token'));
-  const [theme, setTheme] = useState(localStorage.getItem('theme') || 'dark');
   const [autoLogoutTimeoutMinutes, setAutoLogoutTimeoutMinutes] = useState(DEFAULT_AUTO_LOGOUT_TIMEOUT_MINUTES);
   const username = localStorage.getItem('username') || '';
 
@@ -525,8 +397,6 @@ function App() {
   } else {
     delete axios.defaults.headers.common['Authorization'];
   }
-
-  useEffect(() => { localStorage.setItem('theme', theme); }, [theme]);
 
   useEffect(() => {
     let cancelled = false;
@@ -548,22 +418,27 @@ function App() {
     return () => { cancelled = true; };
   }, [token]);
 
-  const toggleTheme = () => setTheme(prev => prev === 'dark' ? 'light' : 'dark');
-  
   // Exiting safely cleans the state and the local storage
   const handleLogout = () => { localStorage.clear(); setToken(null); };
 
-  if (!token) return <Login onLogin={(newToken) => setToken(newToken)} />;
+  if (!token) {
+    return (
+      <React.Fragment>
+        <Login onLogin={(newToken) => setToken(newToken)} />
+        <DialogHost />
+      </React.Fragment>
+    );
+  }
   
   return (
     <Router>
       <React.Fragment>
         {/* INJECTED AUTO-LOGOUT COMPONENT */}
         <AutoLogout onLogout={handleLogout} timeoutMinutes={autoLogoutTimeoutMinutes} />
-        
-        {theme === 'light' && <style>{lightThemeCSS}</style>}
+
         <div className="aurora-bg"></div>
-        <MainLayout username={username} handleLogout={handleLogout} theme={theme} toggleTheme={toggleTheme} />
+        <MainLayout username={username} handleLogout={handleLogout} />
+        <DialogHost />
       </React.Fragment>
     </Router>
   );

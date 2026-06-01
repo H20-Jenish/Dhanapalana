@@ -5,9 +5,9 @@
 # Use Node.js 18 Alpine Linux for smaller image size
 FROM node:18-alpine
 
-# Install PostgreSQL client tools for database backup/restore operations
-# Required for pg_dump and psql commands used in backup functionality
-RUN apk update && apk add postgresql-client
+# Install PostgreSQL client tools and timezone database.
+# tzdata ensures named IANA timezones work reliably in containers.
+RUN apk update && apk add postgresql-client tzdata
 
 # Set working directory for application
 WORKDIR /app

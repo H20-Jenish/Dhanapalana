@@ -29,6 +29,9 @@ FROM node:18-alpine
 # Set working directory for the final lightweight container
 WORKDIR /app
 
+# Install timezone database for runtime timezone consistency.
+RUN apk update && apk add tzdata
+
 # Install 'serve', a fast static file server designed for React single-page apps
 RUN npm install -g serve
 

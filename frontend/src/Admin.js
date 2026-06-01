@@ -32,14 +32,31 @@ const SpinnerIcon = () => (
 
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
+import { showConfirm, showPrompt } from './dialogService';
 
 // --- PREMIUM SVG ICONS ---
 const IconUsers = () => <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>;
-const IconAI = () => <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z"/><path d="M8 12h8M12 8v8"/><circle cx="12" cy="12" r="3"/></svg>;
 const IconShield = () => <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>;
 const IconDatabase = () => <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>;
 const IconLogs = () => <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>;
 const IconTerminal = () => <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>;
+const IconReminder = () => <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>;
+
+const COMMON_TIMEZONES = [
+  'America/Toronto',
+  'America/Vancouver',
+  'America/New_York',
+  'America/Chicago',
+  'America/Los_Angeles',
+  'Europe/London',
+  'Europe/Berlin',
+  'Asia/Kolkata',
+  'Asia/Dubai',
+  'Asia/Singapore',
+  'Asia/Tokyo',
+  'Australia/Sydney',
+  'UTC',
+];
 
 const SystemHealth = () => {
   const [health, setHealth] = useState(null);
@@ -97,6 +114,11 @@ const Admin = () => {
   const [backups, setBackups] = useState([]);
   const [scheduleConfig, setScheduleConfig] = useState({ BACKUP_FREQ: 'none', BACKUP_TIME: '02:00', BACKUP_DAY: '1' });
   const [securityConfig, setSecurityConfig] = useState({ AUTO_LOGOUT_TIMEOUT_MINUTES: '15' });
+  const [investmentReminderRows, setInvestmentReminderRows] = useState([]);
+  const [investmentReminderSchedule, setInvestmentReminderSchedule] = useState({
+    INVESTMENT_REMINDER_TIME: '09:00',
+    INVESTMENT_REMINDER_TIMEZONE: 'America/Toronto',
+  });
   const [autoLogoutEnabled, setAutoLogoutEnabled] = useState(true);
   const [autoLogoutRestoreMinutes, setAutoLogoutRestoreMinutes] = useState('15');
   
@@ -115,19 +137,6 @@ const Admin = () => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
   const fileInputRef = useRef(null);
-
-  // AI Query Designer state
-  const [aiExamples, setAiExamples] = useState([]);
-  const [aiForm, setAiForm] = useState({ question: '', sql_query: '', description: '' });
-  const [editingExId, setEditingExId] = useState(null);
-  const [showAiForm, setShowAiForm] = useState(false);
-  const [aiTestResult, setAiTestResult] = useState(null);
-  const [aiTestError, setAiTestError] = useState('');
-  const [isGeneratingSQL, setIsGeneratingSQL] = useState(false);
-  const [isTestingSQL, setIsTestingSQL] = useState(false);
-  const [isSavingEx, setIsSavingEx] = useState(false);
-  const [dbSchema, setDbSchema] = useState({});
-  const [schemaOpen, setSchemaOpen] = useState(false);
 
   const [mfaSetup, setMfaSetup] = useState(null);
   const [mfaTokenInput, setMfaTokenInput] = useState('');
@@ -167,9 +176,43 @@ const Admin = () => {
     } catch (err) { alert("Failed to sync Security settings."); }
   };
 
+  const fetchInvestmentReminderSettings = async () => {
+    try {
+      const response = await axios.get(`${API_URL}/investment-reminders`, getAuthHeaders());
+      setInvestmentReminderRows(response.data || []);
+      const scheduleResponse = await axios.get(`${API_URL}/system-settings/investment-reminders`, getAuthHeaders());
+      setInvestmentReminderSchedule(scheduleResponse.data || {
+        INVESTMENT_REMINDER_TIME: '09:00',
+        INVESTMENT_REMINDER_TIMEZONE: 'America/Toronto',
+      });
+    } catch (err) {
+      alert('Failed to load investment reminder settings.');
+    }
+  };
+
+  const saveInvestmentReminderSettings = async () => {
+    try {
+      await axios.post(`${API_URL}/investment-reminders`, {
+        settings: investmentReminderRows.map((row) => ({
+          investment_id: row.investment_id,
+          is_enabled: !!row.is_enabled,
+          frequency_days: Number(row.frequency_days || 30),
+        })),
+      }, getAuthHeaders());
+      await axios.post(`${API_URL}/system-settings/investment-reminders`, {
+        reminderTime: investmentReminderSchedule.INVESTMENT_REMINDER_TIME,
+        reminderTimezone: investmentReminderSchedule.INVESTMENT_REMINDER_TIMEZONE,
+      }, getAuthHeaders());
+      alert('Investment reminder settings saved.');
+      fetchInvestmentReminderSettings();
+    } catch (err) {
+      alert(err.response?.data?.error || 'Failed to save investment reminder settings.');
+    }
+  };
+
   // --- BACKUP MANAGEMENT LOGIC ---
   const triggerManualBackup = async () => {
-    if(!window.confirm("Trigger a manual backup snapshot?")) return;
+    if (!(await showConfirm("Trigger a manual backup snapshot?", { title: 'Manual Backup' }))) return;
     setIsProcessing(true);
     try {
       await axios.post(`${API_URL}/backups/manual`, { notes: backupNote }, getAuthHeaders());
@@ -179,12 +222,12 @@ const Admin = () => {
   };
 
   const deleteBackup = async (id) => {
-    if(!window.confirm("Permanently delete this backup file?")) return;
+    if (!(await showConfirm("Permanently delete this backup file?", { title: 'Delete Backup' }))) return;
     try { await axios.delete(`${API_URL}/backups/${id}`, getAuthHeaders()); fetchBackups(); } catch(err) { alert("Deletion failed."); }
   };
 
   const restoreBackup = async (id, version) => {
-    if(!window.confirm(`CRITICAL: This will overwrite your live database with version [${version}]. All current unsaved progress will be lost. Proceed?`)) return;
+    if (!(await showConfirm(`CRITICAL: This will overwrite your live database with version [${version}]. All current unsaved progress will be lost. Proceed?`, { title: 'Restore Backup' }))) return;
     setIsProcessing(true);
     try {
       await axios.post(`${API_URL}/backups/restore/${id}`, {}, getAuthHeaders());
@@ -256,11 +299,11 @@ const Admin = () => {
     persistAutoLogoutSetting(false);
   };
 
-  const handleImportBackup = (e) => {
+  const handleImportBackup = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
     if (!file.name.toLowerCase().endsWith('.sql')) { alert("Invalid file. Must be .sql"); e.target.value = ''; return; }
-    if (!window.confirm("CRITICAL WARNING: Overwrite current data with this external file?")) { e.target.value = ''; return; }
+    if (!(await showConfirm("CRITICAL WARNING: Overwrite current data with this external file?", { title: 'Import External Backup' }))) { e.target.value = ''; return; }
     
     setIsProcessing(true);
     const reader = new FileReader();
@@ -292,56 +335,24 @@ const Admin = () => {
     if (!passwordRegex.test(newUserPassword)) return alert("Security Policy: Password must be at least 12 characters and contain letters, numbers, and symbols.");
     try { await axios.post(`${API_URL}/users`, { username: newUsername, password: newUserPassword, role: newUserRole }, getAuthHeaders()); setNewUsername(''); setNewUserPassword(''); setNewUserRole('user'); alert(`User ${newUsername} successfully created!`); fetchData(); } catch (err) { alert(err.response?.data?.error || "Error creating user"); }
   };
-  const handleDeleteUser = async (id, username) => { if (!window.confirm(`Permanently delete the user "${username}"?`)) return; try { await axios.delete(`${API_URL}/users/${id}`, getAuthHeaders()); fetchData(); } catch (err) { alert(err.response?.data?.error || "Cannot delete user."); } };
+  const handleDeleteUser = async (id, username) => { if (!(await showConfirm(`Permanently delete the user "${username}"?`, { title: 'Delete User' }))) return; try { await axios.delete(`${API_URL}/users/${id}`, getAuthHeaders()); fetchData(); } catch (err) { alert(err.response?.data?.error || "Cannot delete user."); } };
   const generateMfa = async () => { try { setMfaSetup((await axios.post(`${API_URL}/auth/mfa/generate`, {}, getAuthHeaders())).data); } catch (err) { alert("Failed to generate MFA."); } };
   const enableMfa = async (e) => { e.preventDefault(); try { await axios.post(`${API_URL}/auth/mfa/enable`, { token: mfaTokenInput, secret: mfaSetup.secret }, getAuthHeaders()); alert("MFA successfully enabled!"); localStorage.setItem('mfa_enabled', 'true'); setIsMfaEnabled(true); setMfaSetup(null); setMfaTokenInput(''); } catch (err) { alert(err.response?.data?.error || "Invalid Code."); } };
-  const disableMfa = async () => { if(!window.confirm("Disable MFA? This reduces account security.")) return; try { await axios.post(`${API_URL}/auth/mfa/disable`, {}, getAuthHeaders()); alert("MFA Disabled."); localStorage.setItem('mfa_enabled', 'false'); setIsMfaEnabled(false); } catch (err) { alert("Failed to disable MFA."); } };
-  // --- AI QUERY DESIGNER LOGIC ---
-  const fetchAiExamples = async () => {
-    try { setAiExamples((await axios.get(`${API_URL}/ai-examples`, getAuthHeaders())).data); } catch(e) {}
-  };
-  const fetchDbSchema = async () => {
-    try { setDbSchema((await axios.get(`${API_URL}/ai-schema`, getAuthHeaders())).data); } catch(e) {}
-  };
-  const openAiModal = () => { setActiveModal('aiExamples'); fetchAiExamples(); fetchDbSchema(); };
-  const openAddAiForm = () => { setAiForm({ question: '', sql_query: '', description: '' }); setEditingExId(null); setAiTestResult(null); setAiTestError(''); setShowAiForm(true); };
-  const openEditAiForm = (ex) => { setAiForm({ question: ex.question, sql_query: ex.sql_query, description: ex.description || '' }); setEditingExId(ex.id); setAiTestResult(null); setAiTestError(''); setShowAiForm(true); };
-  const cancelAiForm = () => { setShowAiForm(false); setEditingExId(null); setAiTestResult(null); setAiTestError(''); };
-  const generateSQL = async () => {
-    if (!aiForm.question.trim()) return alert('Enter a question first.');
-    setIsGeneratingSQL(true); setAiTestResult(null); setAiTestError('');
+  const disableMfa = async () => { if (!(await showConfirm("Disable MFA? This reduces account security.", { title: 'Disable MFA' }))) return; try { await axios.post(`${API_URL}/auth/mfa/disable`, {}, getAuthHeaders()); alert("MFA Disabled."); localStorage.setItem('mfa_enabled', 'false'); setIsMfaEnabled(false); } catch (err) { alert("Failed to disable MFA."); } };
+  const handleFactoryReset = async () => {
+    const promptWord = await showPrompt("CRITICAL ACTION: This will instantly vaporize ALL data, users, and settings. Type 'RESET' to confirm:", { title: 'Factory Reset Confirmation', defaultValue: '' });
+    if (promptWord !== 'RESET') return;
+    setIsResetting(true);
     try {
-      const res = await axios.post(`${API_URL}/ai-examples/generate`, { question: aiForm.question }, getAuthHeaders());
-      setAiForm(f => ({ ...f, sql_query: res.data.sql || '' }));
-    } catch(e) { alert('AI generation failed: ' + (e.response?.data?.error || e.message)); }
-    setIsGeneratingSQL(false);
+      await axios.post(`${API_URL}/system/reset`, {}, getAuthHeaders());
+      alert("System completely wiped. Restarting environment...");
+      localStorage.clear();
+      window.location.href = '/';
+    } catch (err) {
+      alert("Reset failed.");
+      setIsResetting(false);
+    }
   };
-  const testSQL = async () => {
-    if (!aiForm.sql_query.trim()) return alert('Enter a SQL query first.');
-    setIsTestingSQL(true); setAiTestResult(null); setAiTestError('');
-    try {
-      const res = await axios.post(`${API_URL}/ai-examples/test`, { sql: aiForm.sql_query }, getAuthHeaders());
-      setAiTestResult(res.data);
-    } catch(e) { setAiTestError(e.response?.data?.error || 'Query failed.'); }
-    setIsTestingSQL(false);
-  };
-  const saveAiExample = async () => {
-    if (!aiForm.question.trim() || !aiForm.sql_query.trim()) return alert('Question and SQL are required.');
-    setIsSavingEx(true);
-    try {
-      if (editingExId) { await axios.put(`${API_URL}/ai-examples/${editingExId}`, aiForm, getAuthHeaders()); }
-      else { await axios.post(`${API_URL}/ai-examples`, aiForm, getAuthHeaders()); }
-      cancelAiForm(); fetchAiExamples();
-    } catch(e) { alert('Save failed: ' + (e.response?.data?.error || e.message)); }
-    setIsSavingEx(false);
-  };
-  const deleteAiExample = async (id, question) => {
-    if (!window.confirm(`Delete this example?\n\n"${question}"\n\nThe AI will no longer use this pattern.`)) return;
-    try { await axios.delete(`${API_URL}/ai-examples/${id}`, getAuthHeaders()); fetchAiExamples(); }
-    catch(e) { alert('Delete failed.'); }
-  };
-
-  const handleFactoryReset = async () => { const promptWord = window.prompt("CRITICAL ACTION: This will instantly vaporize ALL data, users, and settings. Type 'RESET' to confirm:"); if (promptWord !== 'RESET') return; setIsResetting(true); try { await axios.post(`${API_URL}/system/reset`, {}, getAuthHeaders()); alert("System completely wiped. Restarting environment..."); localStorage.clear(); window.location.href = '/'; } catch (err) { alert("Reset failed."); setIsResetting(false); } };
 
   if (error) return <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><div style={{ background: 'rgba(239, 68, 68, 0.1)', padding: '30px', borderRadius: '12px', border: '1px solid rgba(239, 68, 68, 0.3)', textAlign: 'center' }}><h2 style={{ color: '#ef4444', margin: '0 0 10px 0' }}>Access Denied</h2><p style={{ color: '#64748b', margin: 0 }}>You must be an Administrator to view this panel.</p></div></div>;
 
@@ -359,8 +370,8 @@ const Admin = () => {
         <AdminCard icon={<IconLogs />} title="System Audit Logs" description="Track administrative configuration events." accentColor="#f59e0b" onClick={() => setActiveModal('audit')} />
         <AdminCard icon={<IconTerminal />} title="Container Logs" description="Real-time Docker service log aggregation." accentColor="#10b981" onClick={() => { setActiveModal('docker'); fetchDockerLogs(); }} />
         <AdminCard icon={<IconShield />} title="Security & MFA" description={`Current Status: ${isMfaEnabled ? 'Enabled' : 'Disabled'} • Login timeout: ${securityConfig.AUTO_LOGOUT_TIMEOUT_MINUTES === '0' ? 'Disabled' : `${securityConfig.AUTO_LOGOUT_TIMEOUT_MINUTES || '15'} min`}`} accentColor={isMfaEnabled ? '#10b981' : '#ef4444'} onClick={() => { setActiveModal('mfa'); fetchSecuritySettings(); }} />
+        <AdminCard icon={<IconReminder />} title="Investment Reminders" description="Configure per-asset Telegram cadence (daily, every 15 days, etc.)." accentColor="#22d3ee" onClick={() => { setActiveModal('investment-reminders'); fetchInvestmentReminderSettings(); }} />
         <AdminCard icon={<IconUsers />} title="User Management" description="Add users, assign roles, and revoke system access." accentColor="#0ea5e9" onClick={() => setActiveModal('users')} />
-        <AdminCard icon={<IconAI />} title="AI Query Designer" description="Manage the few-shot examples that teach the AI to understand your financial questions." accentColor="#8b5cf6" onClick={openAiModal} />
       </div>
 
       <div className="glass-card" style={{ maxWidth: '400px', border: '1px solid rgba(239, 68, 68, 0.3)', padding: '30px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
@@ -503,6 +514,130 @@ const Admin = () => {
         </ModalWrapper>
       )}
 
+      {activeModal === 'investment-reminders' && (
+        <ModalWrapper title="Investment Reminder Rules" onClose={() => setActiveModal(null)}>
+          <div style={{ marginBottom: '16px' }}>
+            <p className="text-muted" style={{ margin: 0, fontSize: '14px', lineHeight: 1.5 }}>
+              Set reminder cadence per asset. Telegram reminders will be sent when an investment is due for a value update.
+            </p>
+          </div>
+
+          <div className="glass-card" style={{ padding: '14px 16px', marginBottom: '14px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '6px' }}>Reminder Time</label>
+                <input
+                  type="time"
+                  value={investmentReminderSchedule.INVESTMENT_REMINDER_TIME || '09:00'}
+                  onChange={(e) => setInvestmentReminderSchedule((prev) => ({ ...prev, INVESTMENT_REMINDER_TIME: e.target.value }))}
+                  className="glass-input"
+                  style={{ width: '100%', padding: '10px 12px' }}
+                />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '6px' }}>Timezone (IANA)</label>
+                <input
+                  list="timezone-options"
+                  type="text"
+                  value={investmentReminderSchedule.INVESTMENT_REMINDER_TIMEZONE || 'America/Toronto'}
+                  onChange={(e) => setInvestmentReminderSchedule((prev) => ({ ...prev, INVESTMENT_REMINDER_TIMEZONE: e.target.value }))}
+                  className="glass-input"
+                  style={{ width: '100%', padding: '10px 12px' }}
+                  placeholder="America/Toronto"
+                />
+                <datalist id="timezone-options">
+                  {COMMON_TIMEZONES.map((tz) => <option key={tz} value={tz} />)}
+                </datalist>
+              </div>
+            </div>
+            <p className="text-muted" style={{ margin: '10px 0 0 0', fontSize: '12px' }}>
+              Telegram dispatch runs at {investmentReminderSchedule.INVESTMENT_REMINDER_TIME || '09:00'} ({investmentReminderSchedule.INVESTMENT_REMINDER_TIMEZONE || 'America/Toronto'}).
+            </p>
+          </div>
+
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', textAlign: 'left', borderCollapse: 'collapse', fontSize: '13px' }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid rgba(150,150,150,0.2)', color: 'var(--text-muted)' }}>
+                  <th style={{ padding: '12px 8px' }}>Asset</th>
+                  <th style={{ padding: '12px 8px' }}>Type</th>
+                  <th style={{ padding: '12px 8px' }}>Last Updated</th>
+                  <th style={{ padding: '12px 8px' }}>Every (Days)</th>
+                  <th style={{ padding: '12px 8px' }}>Next Due</th>
+                  <th style={{ padding: '12px 8px', textAlign: 'center' }}>Enabled</th>
+                </tr>
+              </thead>
+              <tbody>
+                {investmentReminderRows.length === 0 && (
+                  <tr>
+                    <td colSpan="6" style={{ padding: '20px', textAlign: 'center', color: '#64748b' }}>
+                      No investment assets available.
+                    </td>
+                  </tr>
+                )}
+                {investmentReminderRows.map((row, idx) => {
+                  const baseDate = row.last_log_date ? new Date(row.last_log_date) : null;
+                  const frequency = Number(row.frequency_days || 30);
+                  const dueDate = baseDate ? new Date(baseDate) : null;
+                  if (dueDate) dueDate.setDate(dueDate.getDate() + frequency);
+                  const dueWithSchedule = dueDate
+                    ? `${dueDate.toLocaleDateString('en-CA')} ${investmentReminderSchedule.INVESTMENT_REMINDER_TIME || '09:00'} (${investmentReminderSchedule.INVESTMENT_REMINDER_TIMEZONE || 'America/Toronto'})`
+                    : 'Starts after first log';
+
+                  return (
+                    <tr key={row.investment_id} style={{ borderBottom: '1px solid rgba(150,150,150,0.1)' }}>
+                      <td style={{ padding: '14px 8px', fontWeight: 700 }}>{row.name}</td>
+                      <td style={{ padding: '14px 8px' }}>{row.account_type_name || 'Non-Reg'} • {row.type}</td>
+                      <td style={{ padding: '14px 8px' }}>{row.last_log_date ? new Date(row.last_log_date).toLocaleDateString('en-CA') : 'Never logged'}</td>
+                      <td style={{ padding: '14px 8px' }}>
+                        <input
+                          type="number"
+                          min="1"
+                          max="365"
+                          value={row.frequency_days || 30}
+                          onChange={(e) => {
+                            const next = [...investmentReminderRows];
+                            next[idx] = {
+                              ...next[idx],
+                              frequency_days: e.target.value,
+                            };
+                            setInvestmentReminderRows(next);
+                          }}
+                          className="glass-input"
+                          style={{ width: '110px', padding: '8px 10px' }}
+                        />
+                      </td>
+                      <td style={{ padding: '14px 8px' }}>{dueWithSchedule}</td>
+                      <td style={{ padding: '14px 8px', textAlign: 'center' }}>
+                        <input
+                          type="checkbox"
+                          checked={!!row.is_enabled}
+                          onChange={(e) => {
+                            const next = [...investmentReminderRows];
+                            next[idx] = {
+                              ...next[idx],
+                              is_enabled: e.target.checked,
+                            };
+                            setInvestmentReminderRows(next);
+                          }}
+                          style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                        />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <div style={{ marginTop: '20px', display: 'flex', justifyContent: 'flex-end' }}>
+            <button onClick={saveInvestmentReminderSettings} className="glass-button" style={{ padding: '12px 18px', fontWeight: 700 }}>
+              Save Reminder Rules
+            </button>
+          </div>
+        </ModalWrapper>
+      )}
+
       {activeModal === 'mfa' && (
         <ModalWrapper title="Two-Factor Authentication" onClose={() => setActiveModal(null)}>
           <p className="text-muted" style={{ marginBottom: '24px', lineHeight: 1.5 }}>Protect your Vault with an Authenticator app. Highly recommended for Administrators.</p>
@@ -573,146 +708,6 @@ const Admin = () => {
         </ModalWrapper>
       )}
 
-      {activeModal === 'aiExamples' && (
-        <ModalWrapper title="🤖 AI Query Designer" onClose={() => { setActiveModal(null); cancelAiForm(); }}>
-          {!showAiForm ? (
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-                <p className="text-muted" style={{ margin: 0, fontSize: '13px' }}>These examples teach the AI how to convert your plain-English questions into SQL. Add new ones, edit wrong ones, or delete ones you no longer need.</p>
-                <button onClick={openAddAiForm} className="glass-button" style={{ flexShrink: 0, marginLeft: '16px', padding: '8px 18px', fontWeight: 600, background: '#7c3aed' }}>+ Add Example</button>
-              </div>
-              <table style={{ width: '100%', textAlign: 'left', borderCollapse: 'collapse', fontSize: '13px' }}>
-                <thead>
-                  <tr style={{ borderBottom: '1px solid rgba(150,150,150,0.2)', color: 'var(--text-muted)' }}>
-                    <th style={{ padding: '10px 8px', width: '40px' }}>#</th>
-                    <th style={{ padding: '10px 8px' }}>Question</th>
-                    <th style={{ padding: '10px 8px' }}>Description</th>
-                    <th style={{ padding: '10px 8px', textAlign: 'right' }}>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {aiExamples.length === 0 && <tr><td colSpan="4" style={{ padding: '20px', textAlign: 'center', color: '#64748b' }}>No examples found.</td></tr>}
-                  {aiExamples.map(ex => (
-                    <tr key={ex.id} style={{ borderBottom: '1px solid rgba(150,150,150,0.08)' }}>
-                      <td style={{ padding: '12px 8px', color: '#64748b', fontSize: '12px' }}>{ex.id}</td>
-                      <td style={{ padding: '12px 8px', maxWidth: '280px' }}>
-                        <div style={{ fontWeight: 500, marginBottom: '2px' }}>{ex.question}</div>
-                        <code style={{ fontSize: '11px', color: '#8b5cf6', opacity: 0.7, display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '280px' }}>{ex.sql_query}</code>
-                      </td>
-                      <td style={{ padding: '12px 8px', fontSize: '12px', color: 'var(--text-muted)' }}>{ex.description}</td>
-                      <td style={{ padding: '12px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
-                        <button onClick={() => openEditAiForm(ex)} className="glass-button" style={{ padding: '5px 10px', fontSize: '11px', marginRight: '6px' }}>Edit</button>
-                        <button onClick={() => deleteAiExample(ex.id, ex.question)} className="glass-button glass-button-danger" style={{ padding: '5px 10px', fontSize: '11px' }}>Delete</button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
-                <button onClick={cancelAiForm} className="glass-button" style={{ padding: '6px 12px', fontSize: '12px' }}>← Back</button>
-                <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>{editingExId ? 'Edit Example' : 'Add New Example'}</h3>
-              </div>
-
-              {/* Question + Description */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
-                <div>
-                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '6px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Plain-English Question</label>
-                  <textarea value={aiForm.question} onChange={e => setAiForm(f => ({ ...f, question: e.target.value }))} className="glass-input" placeholder="e.g. What did I spend on groceries last month?" rows={3} style={{ width: '100%', resize: 'vertical', fontFamily: 'inherit', fontSize: '13px' }} />
-                </div>
-                <div>
-                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '6px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Description (optional)</label>
-                  <textarea value={aiForm.description} onChange={e => setAiForm(f => ({ ...f, description: e.target.value }))} className="glass-input" placeholder="e.g. Total grocery spend for last month" rows={3} style={{ width: '100%', resize: 'vertical', fontFamily: 'inherit', fontSize: '13px' }} />
-                </div>
-              </div>
-
-              <button onClick={generateSQL} disabled={isGeneratingSQL || !aiForm.question.trim()} className="glass-button" style={{ width: '100%', padding: '11px', marginBottom: '16px', fontWeight: 700, background: isGeneratingSQL ? '#5b21b6' : '#7c3aed', letterSpacing: '0.3px', opacity: (!aiForm.question.trim() ? 0.45 : 1), display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                {isGeneratingSQL ? <><SpinnerIcon />Generating SQL — this may take up to 30s...</> : '✨ Generate SQL from Question'}
-              </button>
-
-              {/* SQL Editor + Schema Browser */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 280px', gap: '16px', marginBottom: '12px' }}>
-                <div>
-                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '6px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>SQL Query</label>
-                  <textarea value={aiForm.sql_query} onChange={e => { setAiForm(f => ({ ...f, sql_query: e.target.value })); setAiTestResult(null); setAiTestError(''); }} className="glass-input" placeholder="SQL will appear here after generation, or type manually..." rows={8} style={{ width: '100%', resize: 'vertical', fontFamily: 'Consolas, Monaco, monospace', fontSize: '12px', lineHeight: 1.6 }} />
-                  <div style={{ marginTop: '8px', padding: '10px 12px', background: 'rgba(139, 92, 246, 0.06)', border: '1px solid rgba(139, 92, 246, 0.2)', borderRadius: '8px', fontSize: '11px', color: 'var(--text-muted)' }}>
-                    <strong style={{ color: '#8b5cf6' }}>📅 Date Placeholders</strong> — use these in SQL so queries stay correct every month:<br/>
-                    <code style={{ color: '#a78bfa' }}>{'{TODAY}'}</code> &nbsp;·&nbsp; <code style={{ color: '#a78bfa' }}>{'{THIS_MONTH_START}'}</code> &nbsp;·&nbsp;
-                    <code style={{ color: '#a78bfa' }}>{'{LAST_MONTH_START}'}</code> &nbsp;·&nbsp; <code style={{ color: '#a78bfa' }}>{'{LAST_MONTH_END}'}</code> &nbsp;·&nbsp;
-                    <code style={{ color: '#a78bfa' }}>{'{LAST_TO_LAST_START}'}</code> &nbsp;·&nbsp; <code style={{ color: '#a78bfa' }}>{'{LAST_TO_LAST_END}'}</code>
-                  </div>
-                </div>
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                    <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Schema Browser</label>
-                    <button onClick={() => setSchemaOpen(o => !o)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: '12px' }}>{schemaOpen ? '▲ Hide' : '▼ Show'}</button>
-                  </div>
-                  {schemaOpen && (
-                    <div style={{ border: '1px solid rgba(150,150,150,0.15)', borderRadius: '8px', overflowY: 'auto', maxHeight: '260px', padding: '10px', fontSize: '11px' }}>
-                      {Object.entries(dbSchema).map(([table, cols]) => (
-                        <div key={table} style={{ marginBottom: '12px' }}>
-                          <div style={{ fontWeight: 700, color: '#8b5cf6', marginBottom: '4px', fontFamily: 'monospace' }}>{table}</div>
-                          {cols.map(c => (
-                            <div key={c.column} style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 4px', gap: '8px' }}>
-                              <span style={{ fontFamily: 'monospace', color: 'var(--text-main)' }}>{c.column}</span>
-                              <span style={{ color: '#64748b' }}>{c.type}</span>
-                            </div>
-                          ))}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  {!schemaOpen && <div style={{ fontSize: '12px', color: '#64748b', padding: '8px', border: '1px dashed rgba(150,150,150,0.2)', borderRadius: '8px', textAlign: 'center' }}>Click Show to view table columns</div>}
-                </div>
-              </div>
-
-              {/* Test button + results */}
-              <button onClick={testSQL} disabled={isTestingSQL || !aiForm.sql_query.trim()} className="glass-button" style={{ width: '100%', padding: '10px', marginBottom: '12px', fontWeight: 600, opacity: (!aiForm.sql_query.trim() ? 0.5 : 1) }}>
-                {isTestingSQL ? '⏳ Running Query...' : '▶ Test Query Against Live Database'}
-              </button>
-
-              {aiTestError && (
-                <div style={{ padding: '12px', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: '8px', marginBottom: '12px', fontSize: '13px', color: '#ef4444', fontFamily: 'monospace' }}>
-                  ❌ {aiTestError}
-                </div>
-              )}
-              {aiTestResult && (
-                <div style={{ padding: '12px', background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.25)', borderRadius: '8px', marginBottom: '12px' }}>
-                  <div style={{ fontSize: '12px', fontWeight: 600, color: '#10b981', marginBottom: '8px' }}>✅ {aiTestResult.rowCount} row{aiTestResult.rowCount !== 1 ? 's' : ''} returned</div>
-                  {aiTestResult.rows.length > 0 && (
-                    <div style={{ overflowX: 'auto' }}>
-                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', fontFamily: 'monospace' }}>
-                        <thead>
-                          <tr style={{ borderBottom: '1px solid rgba(16,185,129,0.2)' }}>
-                            {Object.keys(aiTestResult.rows[0]).map(k => <th key={k} style={{ padding: '6px 8px', textAlign: 'left', color: '#10b981', fontWeight: 600 }}>{k}</th>)}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {aiTestResult.rows.map((row, i) => (
-                            <tr key={i} style={{ borderBottom: '1px solid rgba(150,150,150,0.08)' }}>
-                              {Object.values(row).map((v, j) => <td key={j} style={{ padding: '6px 8px' }}>{String(v ?? '')}</td>)}
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Save / Cancel */}
-              <div style={{ display: 'flex', gap: '12px' }}>
-                <button onClick={cancelAiForm} className="glass-button" style={{ flex: 1, padding: '12px' }}>Cancel</button>
-                <button onClick={saveAiExample} disabled={isSavingEx || !aiForm.question.trim() || !aiForm.sql_query.trim()} className="glass-button" style={{ flex: 2, padding: '12px', fontWeight: 700, background: '#059669', opacity: (isSavingEx || !aiForm.question.trim() || !aiForm.sql_query.trim() ? 0.45 : 1) }}>
-                  {isSavingEx ? 'Saving...' : `💾 ${editingExId ? 'Update' : 'Save'} Example`}
-                </button>
-              </div>
-            </div>
-          )}
-        </ModalWrapper>
-      )}
 
       {activeModal === 'audit' && (
         <ModalWrapper title="System Audit Logs" onClose={() => setActiveModal(null)}>
@@ -740,7 +735,6 @@ const Admin = () => {
                   <option value="vault_db">Database</option>
                   <option value="vault_nginx">Nginx Gateway</option>
                   <option value="vault_frontend">Frontend UI</option>
-                  <option value="vault_ollama">Ollama AI</option>
                 </select>
                 <select value={logFilterLevel} onChange={e => setLogFilterLevel(e.target.value)} className="glass-input" style={{ padding: '8px 12px' }}>
                   <option value="ALL">All Severities</option>

@@ -1,379 +1,500 @@
-/**
- * Dhanap\u0101lana - Reports Component
- * Reports.js - AI-Powered Financial Analysis and Monthly Reports
- *
- * This component generates comprehensive monthly financial reports with AI-generated
- * insights and analysis. It leverages the Ollama AI model backend to provide intelligent
- * commentary on spending patterns, income trends, savings goals, and personalized recommendations.
- *
- * KEY FEATURES:
- * - Monthly financial report generation
- * - AI-powered analysis using Ollama model with GPT-like capabilities
- * - Spending analysis by category and trends
- * - Income analysis and growth patterns
- * - Savings rate calculation and optimization
- * - Investment portfolio performance analysis
- * - Intelligent recommendations for financial improvement
- * - Report export functionality (PDF/CSV)
- * - Historical report comparison and tracking
- * - Multi-year trend analysis visualization
- * - Budget vs. actual expense tracking
- * - Financial goal progress monitoring
- * - Real-time AI processing with progress indicators
- */
-
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import axios from 'axios';
+import { showAlert } from './dialogService';
+
+const formatMonth = (monthString) => {
+  if (!monthString) return '';
+  const [year, month] = monthString.split('-');
+  return new Date(Number(year), Number(month) - 1).toLocaleString('default', {
+    month: 'long',
+    year: 'numeric',
+  });
+};
+
+const formatPreviousMonth = (monthString) => {
+  if (!monthString) return '';
+  const [year, month] = monthString.split('-').map(Number);
+  const previousDate = new Date(year, month - 2, 1);
+  return previousDate.toLocaleString('default', { month: 'long', year: 'numeric' });
+};
+
+const formatCurrency = (value) => {
+  const amount = Number(value || 0);
+  return amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
+
+const formatDiff = (value) => {
+  const amount = Number(value || 0);
+  return `${amount >= 0 ? '+' : '-'}C$ ${Math.abs(amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+};
+
+const safeText = (value) => String(value ?? '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#039;');
+
+const formatDate = (value) => {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleDateString('en-CA');
+};
+
+const makeRows = (rows, mapper) => {
+  if (!rows || rows.length === 0) return '<tr><td colspan="20" style="padding:10px;color:#6b7280;">No records.</td></tr>';
+  return rows.map((row) => `<tr>${mapper(row)}</tr>`).join('');
+};
+
+const buildMonthlySummaryHtml = (payload) => {
+  const summary = payload.summary || {};
+  const accountActivity = Object.entries(payload.accountActivity || {}).sort((a, b) => Number(b[1] || 0) - Number(a[1] || 0));
+
+  return `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Monthly Summary - ${safeText(payload.month)}</title>
+    <style>
+      body { font-family: Segoe UI, Arial, sans-serif; margin: 24px; color: #111827; background: #f8fafc; }
+      h1, h2, h3 { margin: 0 0 8px 0; }
+      .muted { color: #6b7280; }
+      .grid { display: grid; grid-template-columns: repeat(4, minmax(160px, 1fr)); gap: 12px; margin: 16px 0 20px; }
+      .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 12px; }
+      .label { font-size: 12px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.4px; }
+      .value { font-size: 20px; font-weight: 700; margin-top: 4px; }
+      .section { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 14px; margin-bottom: 16px; }
+      table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+      th, td { border-bottom: 1px solid #e5e7eb; text-align: left; padding: 8px; font-size: 13px; }
+      th { color: #374151; background: #f9fafb; }
+      .tag { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; background: #eef2ff; color: #3730a3; }
+      .two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    </style>
+  </head>
+  <body>
+    <h1>Monthly Financial Summary</h1>
+    <p class="muted">Month: ${safeText(payload.month)} (${safeText(formatMonth(payload.month))})</p>
+    <p class="muted">Generated: ${safeText(formatDate(payload.generatedAt))} • Timezone: ${safeText(payload.timezone || 'UTC')}</p>
+
+    <div class="grid">
+      <div class="card"><div class="label">Income</div><div class="value">C$ ${Number(summary.income || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div></div>
+      <div class="card"><div class="label">Expense</div><div class="value">C$ ${Number(summary.expense || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div></div>
+      <div class="card"><div class="label">Net Flow</div><div class="value">C$ ${Number(summary.net || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div></div>
+      <div class="card"><div class="label">Savings Rate</div><div class="value">${Number(summary.savingsRate || 0).toFixed(1)}%</div></div>
+    </div>
+
+    <div class="section">
+      <h3>Category Comparison</h3>
+      <table>
+        <thead><tr><th>Category</th><th>Current</th><th>Previous</th><th>Diff</th><th>Diff %</th></tr></thead>
+        <tbody>${makeRows(payload.categoryComparison || [], (row) => `
+          <td>${safeText(row.category)}</td>
+          <td>C$ ${Number(row.current || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+          <td>C$ ${Number(row.previous || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+          <td>${Number(row.diff || 0) >= 0 ? '+' : ''}C$ ${Math.abs(Number(row.diff || 0)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+          <td>${Number(row.pct || 0).toFixed(1)}%</td>
+        `)}</tbody>
+      </table>
+    </div>
+
+    <div class="section">
+      <h3>Account Activity</h3>
+      <table>
+        <thead><tr><th>Account</th><th>Transaction Count</th></tr></thead>
+        <tbody>${makeRows(accountActivity, ([name, count]) => `
+          <td>${safeText(name)}</td>
+          <td>${Number(count || 0)}</td>
+        `)}</tbody>
+      </table>
+    </div>
+
+    <div class="two">
+      <div class="section">
+        <h3>Income Transactions</h3>
+        <table>
+          <thead><tr><th>Date</th><th>Source</th><th>Account</th><th>Amount</th></tr></thead>
+          <tbody>${makeRows(payload.incomeTransactions || [], (row) => `
+            <td>${safeText(formatDate(row.date))}</td>
+            <td>${safeText(row.source)}</td>
+            <td>${safeText(`${row.bank_name || 'Vault'}${row.account_type ? ` (${row.account_type})` : ''}`)}</td>
+            <td>C$ ${Number(row.amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+          `)}</tbody>
+        </table>
+      </div>
+      <div class="section">
+        <h3>Expense Transactions</h3>
+        <table>
+          <thead><tr><th>Date</th><th>Description</th><th>Category</th><th>Paid Via</th><th>Amount</th></tr></thead>
+          <tbody>${makeRows(payload.expenseTransactions || [], (row) => `
+            <td>${safeText(formatDate(row.date))}</td>
+            <td>${safeText(row.description || '-')}</td>
+            <td>${safeText(row.category)}</td>
+            <td>${safeText(row.credit_card_name ? `CC: ${row.credit_card_name}` : `${row.bank_name || 'Vault'}${row.account_type ? ` (${row.account_type})` : ''}`)}</td>
+            <td>C$ ${Number(row.amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+          `)}</tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="two">
+      <div class="section">
+        <h3>Bank Statement Snapshot (Total Left)</h3>
+        <table>
+          <thead><tr><th>Bank</th><th>Type</th><th>Currency</th><th>Balance</th></tr></thead>
+          <tbody>${makeRows(payload.bankStatements || [], (row) => `
+            <td>${safeText(row.bank_name)}</td>
+            <td>${safeText(row.account_type || '-')}</td>
+            <td>${safeText(row.currency || 'CAD')}</td>
+            <td>${safeText(row.currency || 'CAD')} ${Number(row.balance || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+          `)}</tbody>
+        </table>
+      </div>
+      <div class="section">
+        <h3>Credit Card Usage</h3>
+        <table>
+          <thead><tr><th>Card</th><th>Monthly Spend</th><th>Current Balance</th><th>Limit</th></tr></thead>
+          <tbody>${makeRows(payload.creditCardUsage || [], (row) => `
+            <td>${safeText(row.name)}</td>
+            <td>C$ ${Number(row.monthly_spend || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+            <td>C$ ${Number(row.balance || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+            <td>C$ ${Number(row.limit_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+          `)}</tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="two">
+      <div class="section">
+        <h3>Investments (Monthly Value Changes)</h3>
+        <table>
+          <thead><tr><th>Asset</th><th>Type</th><th>Date</th><th>Previous</th><th>Balance</th><th>Contribution</th><th>Gain/Loss</th></tr></thead>
+          <tbody>${makeRows(payload.investmentChanges || [], (row) => `
+            <td>${safeText(row.name)}</td>
+            <td>${safeText(row.type)}</td>
+            <td>${safeText(formatDate(row.date))}</td>
+            <td>C$ ${Number(row.previous_balance || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+            <td>C$ ${Number(row.balance || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+            <td>C$ ${Number(row.net_contribution || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+            <td>${Number(row.gain_loss || 0) >= 0 ? '+' : ''}C$ ${Math.abs(Number(row.gain_loss || 0)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+          `)}</tbody>
+        </table>
+      </div>
+      <div class="section">
+        <h3>Transfers</h3>
+        <table>
+          <thead><tr><th>Date</th><th>Recipient</th><th>Method</th><th>Amount</th></tr></thead>
+          <tbody>${makeRows(payload.transfers || [], (row) => `
+            <td>${safeText(formatDate(row.date))}</td>
+            <td>${safeText(row.recipient)}</td>
+            <td><span class="tag">${safeText(row.method)}</span></td>
+            <td>C$ ${Number(row.amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+          `)}</tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="section">
+      <h3>Lending</h3>
+      <table>
+        <thead><tr><th>Date</th><th>Recipient</th><th>Method</th><th>Loaned</th><th>Repaid</th><th>Outstanding</th></tr></thead>
+        <tbody>${makeRows(payload.lending || [], (row) => `
+          <td>${safeText(formatDate(row.date))}</td>
+          <td>${safeText(row.recipient)}</td>
+          <td>${safeText(row.method)}</td>
+          <td>C$ ${Number(row.amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+          <td>C$ ${Number(row.repaid || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+          <td>C$ ${Math.max(Number(row.amount || 0) - Number(row.repaid || 0), 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+        `)}</tbody>
+      </table>
+    </div>
+  </body>
+</html>`;
+};
+
+const getLabelTextColor = (label) => {
+  const palettes = [
+    '#93c5fd', '#6ee7b7', '#fcd34d', '#c4b5fd', '#f9a8d4', '#67e8f9', '#bef264', '#fda4af'
+  ];
+
+  const key = String(label || '');
+  let hash = 0;
+  for (let i = 0; i < key.length; i += 1) {
+    hash = ((hash << 5) - hash) + key.charCodeAt(i);
+    hash |= 0;
+  }
+
+  if (key.startsWith('CC:')) {
+    return '#fda4af';
+  }
+  return palettes[Math.abs(hash) % palettes.length];
+};
+
+const MonthCard = ({ report, isSelected, onSelect, onDownload, isDownloading }) => {
+  const savingsRate = Number(report.savingsRate || 0);
+  const net = Number(report.net || 0);
+  const isPositive = net >= 0;
+  const categories = Array.isArray(report.catComparison) ? report.catComparison : [];
+  const categoryCount = categories.length;
+  const accountEntries = Object.entries(report.accounts || {});
+  const totalAccountTransactions = accountEntries.reduce((sum, [, count]) => sum + Number(count || 0), 0);
+  const previousMonthLabel = formatPreviousMonth(report.month);
+
+  return (
+    <div
+      className="glass-card"
+      onClick={onSelect}
+      style={{
+        position: 'relative',
+        padding: '20px',
+        borderTop: report.isCurrentMonth ? '4px solid var(--accent-cyan)' : '1px solid var(--border-glass)',
+        boxShadow: isSelected && !report.isCurrentMonth ? '0 0 0 1px rgba(34, 211, 238, 0.2) inset' : 'none',
+        cursor: 'pointer',
+        transition: 'transform 0.2s ease, border-color 0.2s ease',
+      }}
+    >
+      {report.isCurrentMonth && (
+        <span style={{ position: 'absolute', top: '16px', right: '16px', background: 'var(--accent-cyan)', color: '#000', fontSize: '10px', fontWeight: 'bold', padding: '4px 8px', borderRadius: '12px' }}>
+          CURRENT
+        </span>
+      )}
+
+      <div style={{ marginBottom: '16px' }}>
+        <h2 style={{ margin: '0 0 6px 0', fontSize: '1.35rem', fontWeight: 800 }}>{formatMonth(report.month)}</h2>
+        <p className="text-muted" style={{ margin: 0, fontSize: '13px' }}>
+          {categoryCount} expense categories compared with {previousMonthLabel || 'the previous month'}
+        </p>
+        <div style={{ marginTop: '10px' }}>
+          <button
+            type="button"
+            className="glass-button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onDownload(report.month);
+            }}
+            disabled={isDownloading}
+            style={{ padding: '8px 12px', fontSize: '12px', fontWeight: 700 }}
+          >
+            {isDownloading ? 'Preparing...' : 'Download Summary'}
+          </button>
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '12px', marginBottom: '16px' }}>
+        <div style={{ background: 'rgba(59,130,246,0.08)', borderRadius: '14px', padding: '14px' }}>
+          <div className="text-muted" style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.7px' }}>Income</div>
+          <div style={{ fontSize: '1.1rem', fontWeight: 800, marginTop: '4px', color: 'var(--success)' }}>C$ {formatCurrency(report.income)}</div>
+        </div>
+        <div style={{ background: 'rgba(239,68,68,0.08)', borderRadius: '14px', padding: '14px' }}>
+          <div className="text-muted" style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.7px' }}>Expenses</div>
+          <div style={{ fontSize: '1.1rem', fontWeight: 800, marginTop: '4px', color: 'var(--danger)' }}>C$ {formatCurrency(report.expense)}</div>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '18px', paddingBottom: '14px', borderBottom: '1px solid var(--border-glass)' }}>
+        <div>
+          <div className="text-muted" style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.7px', marginBottom: '4px' }}>Net Cash Flow</div>
+          <div style={{ fontSize: '1.35rem', fontWeight: 800, color: isPositive ? 'var(--success)' : 'var(--danger)' }}>
+            {isPositive ? '+' : ''}C$ {formatCurrency(net)}
+          </div>
+        </div>
+        <div style={{ textAlign: 'right' }}>
+          <div className="text-muted" style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.7px', marginBottom: '4px' }}>Savings Rate</div>
+          <div style={{ fontSize: '1.2rem', fontWeight: 800, color: savingsRate >= 20 ? 'var(--success)' : 'var(--warning)' }}>{savingsRate}%</div>
+        </div>
+      </div>
+
+      <div style={{ marginBottom: '18px' }}>
+        <h4 style={{ color: 'var(--text-muted)', fontSize: '12px', textTransform: 'uppercase', marginBottom: '12px', letterSpacing: '0.8px' }}>
+          Category Breakdown (vs Previous Month)
+        </h4>
+        <div style={{ maxHeight: '230px', overflowY: 'auto', paddingRight: '8px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          {categories.length === 0 ? (
+            <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>No expense data for this month.</span>
+          ) : (
+            categories.map((category) => (
+              <div key={category.category} style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-glass)', borderRadius: '12px', padding: '12px 14px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', marginBottom: '8px' }}>
+                  <div style={{ fontWeight: 700 }}>{category.category}</div>
+                  <div style={{ color: category.diff > 0 ? 'var(--danger)' : 'var(--success)', fontWeight: 700, whiteSpace: 'nowrap' }}>
+                    {category.diff > 0 ? 'Higher' : category.diff < 0 ? 'Lower' : 'Same'}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: 'var(--text-muted)' }}>
+                  <span>Spent: C$ {formatCurrency(category.current)}</span>
+                  <span>Prev: C$ {formatCurrency(category.previous)}</span>
+                </div>
+                <div style={{ marginTop: '8px', fontSize: '12px', fontWeight: 700, color: category.diff > 0 ? 'var(--danger)' : category.diff < 0 ? 'var(--success)' : 'var(--text-muted)' }}>
+                  {category.diff > 0 ? `Higher than ${previousMonthLabel || 'previous month'}` : category.diff < 0 ? `Lower than ${previousMonthLabel || 'previous month'}` : `Same as ${previousMonthLabel || 'previous month'}`}
+                  <span style={{ fontWeight: 600, marginLeft: '8px', color: 'var(--text-muted)' }}>{formatDiff(category.diff)} ({category.pct}%)</span>
+                </div>
+                <div style={{ marginTop: '8px' }}>
+                  <div className="progress-bg" style={{ height: '8px' }}>
+                    <div
+                      className="progress-fill"
+                      style={{
+                        width: `${Math.min(Number(category.pct || 0), 100)}%`,
+                        background: category.diff > 0 ? 'var(--danger)' : 'var(--success)',
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+
+      <div>
+        <h4 style={{ color: 'var(--text-muted)', fontSize: '12px', textTransform: 'uppercase', marginBottom: '12px', letterSpacing: '0.8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
+          <span>Accounts Used</span>
+          <span style={{ color: 'var(--accent-cyan)' }}>{totalAccountTransactions} transactions</span>
+        </h4>
+        {accountEntries.length > 0 ? (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+            {accountEntries
+              .sort((a, b) => b[1] - a[1])
+              .map(([accountName, count]) => {
+                const textColor = getLabelTextColor(accountName);
+                return (
+                  <span key={accountName} style={{ padding: '2px 0', fontSize: '12px', color: textColor, fontWeight: 700 }}>
+                    {accountName}: <strong style={{ color: 'var(--accent-cyan)' }}>{count}</strong>
+                  </span>
+                );
+              })}
+          </div>
+        ) : (
+          <div className="text-muted" style={{ fontSize: '13px' }}>No account activity recorded for this month.</div>
+        )}
+      </div>
+
+      <div style={{ marginTop: '18px', background: 'var(--bg-base)', padding: '14px', borderRadius: 'var(--radius-md)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '4px' }}>
+          <span style={{ color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 'bold' }}>Savings Target</span>
+          <span style={{ color: savingsRate >= 20 ? 'var(--success)' : 'var(--warning)', fontWeight: 'bold' }}>{savingsRate}% / 20%</span>
+        </div>
+        <div className="progress-bg">
+          <div className="progress-fill" style={{ width: `${Math.min(savingsRate, 100)}%`, background: savingsRate >= 20 ? 'var(--success)' : 'var(--warning)' }} />
+        </div>
+      </div>
+    </div>
+  );
+};
 
 const Reports = () => {
   const [reports, setReports] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [selectedMonth, setSelectedMonth] = useState('');
+  const [downloadingMonth, setDownloadingMonth] = useState('');
 
-  const [showPdfModal, setShowPdfModal] = useState(false);
-  const [pdfConfig, setPdfConfig] = useState({ month: '', includeComparison: true });
-  const [isPrinting, setIsPrinting] = useState(false);
-  
-  const [analyzingMonth, setAnalyzingMonth] = useState(null);
-  const [expandedInsights, setExpandedInsights] = useState({});
+  const downloadMonthlySummary = async (month) => {
+    try {
+      setDownloadingMonth(month);
+      const response = await axios.get(`/api/reports/monthly/${month}/download`, {
+        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+      });
+      const html = buildMonthlySummaryHtml(response.data || {});
+      const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `monthly_summary_${month}.html`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Failed to download monthly summary', error);
+      await showAlert('Failed to download monthly summary.');
+    } finally {
+      setDownloadingMonth('');
+    }
+  };
 
   useEffect(() => {
     const fetchReports = async () => {
       try {
-        const res = await axios.get('/api/reports/monthly', { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } });
-        setReports(res.data);
-        if (res.data.length > 0) {
-            setPdfConfig(prev => ({ ...prev, month: res.data[0].month }));
+        const response = await axios.get('/api/reports/monthly', {
+          headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+        });
+        const rows = Array.isArray(response.data) ? response.data : [];
+        setReports(rows);
+        if (rows.length > 0) {
+          setSelectedMonth(rows[0].month);
         }
-      } catch (err) { console.error(err); } finally { setLoading(false); }
+      } catch (error) {
+        console.error('Failed to load monthly reports', error);
+      } finally {
+        setLoading(false);
+      }
     };
+
     fetchReports();
   }, []);
 
-  const formatMonth = (monthString) => {
-    if (!monthString) return '';
-    const [year, month] = monthString.split('-');
-    return new Date(year, month - 1).toLocaleString('default', { month: 'long', year: 'numeric' });
-  };
+  if (loading) {
+    return <div style={{ padding: '32px', color: 'var(--text-muted)' }}>Loading monthly reports...</div>;
+  }
 
-  const formatAIText = (text) => {
-    if (!text) return null;
-    return text.split('\n').map((line, i) => {
-        const parts = line.split(/(\*\*.*?\*\*)/g);
-        return (
-            <div key={i} style={{ minHeight: '1em', marginBottom: '6px' }}>
-                {parts.map((part, j) => {
-                    if (part.startsWith('**') && part.endsWith('**')) {
-                        return <strong key={j}>{part.slice(2, -2)}</strong>;
-                    }
-                    return part;
-                })}
-            </div>
-        );
-    });
-  };
+  if (!reports.length) {
+    return <div style={{ padding: '32px', color: 'var(--text-muted)' }}>No monthly report data is available yet.</div>;
+  }
 
-  const toggleInsight = (month) => {
-      setExpandedInsights(prev => ({ ...prev, [month]: !prev[month] }));
-  };
-
-  const handleAnalyzeMonth = async (month) => {
-    setAnalyzingMonth(month);
-    try {
-        const res = await axios.post(`/api/reports/analyze/${month}`, {}, { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } });
-        if (res.data.success) {
-            setReports(prev => prev.map(r => r.month === month ? { ...r, ai_insight: res.data.insights } : r));
-            setExpandedInsights(prev => ({ ...prev, [month]: true }));
-        }
-    } catch (err) {
-        alert(err.response?.data?.error || "Failed to generate AI insights.");
-    }
-    setAnalyzingMonth(null);
-  };
-
-  const executePDFGeneration = () => {
-    const activeReport = reports.find(r => r.month === pdfConfig.month);
-    if (!activeReport || activeReport.isCurrentMonth) return;
-
-    setIsPrinting(true);
-    setShowPdfModal(false);
-    
-    const originalTitle = document.title;
-    document.title = `Dhanapalana - ${formatMonth(pdfConfig.month)}'s finance report`;
-
-    setTimeout(() => {
-        window.print();
-        document.title = originalTitle; 
-        setIsPrinting(false);
-    }, 800);
-  };
-
-  if (loading) return <div style={{ padding: '40px', color: 'var(--text-muted)' }}>Syncing Financial Core & AI Matrices...</div>;
-
-  const activePrintReport = reports.find(r => r.month === pdfConfig.month);
-  const isCurrentSelected = activePrintReport?.isCurrentMonth;
-  const hasComparisonData = activePrintReport && activePrintReport.catComparison && activePrintReport.catComparison.some(c => c.previous > 0);
+  const selectedReport = reports.find((report) => report.month === selectedMonth) || reports[0] || null;
 
   return (
     <div style={{ maxWidth: '1400px', margin: '0 auto', paddingBottom: '40px' }}>
-      
-      <style>
-        {`
-          @media screen { .printable-document { display: none !important; } }
-          @media print {
-            body { background: #ffffff !important; background-color: #ffffff !important; color: #000 !important; }
-            .no-print { display: none !important; }
-            .printable-document { display: block !important; width: 100%; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; }
-            .printable-document h1, .printable-document h2, .printable-document h3, .printable-document h4 { color: #000 !important; margin-bottom: 12px; }
-            .print-card { border: 1px solid #ccc; margin-bottom: 24px; padding: 20px; border-radius: 8px; page-break-inside: avoid; }
-            .print-table { width: 100%; text-align: left; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
-            .print-table th, .print-table td { border-bottom: 1px solid #eee; padding: 10px 4px; }
-            .print-table th { border-bottom: 2px solid #ccc; font-weight: bold; text-transform: uppercase; font-size: 11px; }
-            .text-success { color: #16a34a !important; }
-            .text-danger { color: #dc2626 !important; }
-            .ai-insight-box { background-color: #f8fafc !important; -webkit-print-color-adjust: exact; border-left: 4px solid #0284c7 !important; padding: 20px; font-size: 14px; line-height: 1.6; }
-            .disclaimer { margin-top: 40px; padding-top: 10px; border-top: 1px solid #ccc; font-size: 10px; color: #666 !important; text-align: center; }
-          }
-        `}
-      </style>
+      <div style={{ marginBottom: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: '16px', flexWrap: 'wrap' }}>
+        <div style={{ minWidth: 0 }}>
+          <h1 style={{ fontSize: '2.5rem', marginBottom: '8px', fontWeight: 800, letterSpacing: '-0.5px' }}>Monthly Reports</h1>
+          <p className="text-muted" style={{ margin: 0, fontSize: '15px' }}>
+            Review monthly income, expenses, category shifts, and account transaction counts.
+          </p>
+        </div>
 
-      {/* PRINT LAYER */}
-      {isPrinting && activePrintReport && (
-          <div className="printable-document">
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', borderBottom: '2px solid black', paddingBottom: '16px', marginBottom: '30px' }}>
-                  <div>
-                    <h1 style={{ margin: 0, fontSize: '28px', fontWeight: 800, letterSpacing: '-1px' }}>Dhanapālana</h1>
-                    <span style={{ fontSize: '12px', color: '#666', textTransform: 'uppercase' }}>Wealth Management System</span>
-                  </div>
-                  <h2 style={{ margin: 0, fontSize: '20px', color: '#333' }}>Financial Report: {formatMonth(activePrintReport.month)}</h2>
-              </div>
-              
-              {activePrintReport.ai_insight && (
-                <div className="print-card ai-insight-box">
-                    <h3 style={{ margin: '0 0 16px 0', color: '#0284c7', display: 'flex', alignItems: 'center', gap: '8px' }}>✦ Insights by Vittaparāmarśadātā</h3>
-                    <div>{formatAIText(activePrintReport.ai_insight)}</div>
-                </div>
-              )}
-              
-              <div className="print-card">
-                  <h3>Cash Flow Summary</h3>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #eee', paddingBottom: '8px', marginBottom: '8px' }}>
-                      <span>Total Inflow:</span> <strong>${activePrintReport.income.toLocaleString('en-US', {minimumFractionDigits: 2})}</strong>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #eee', paddingBottom: '8px', marginBottom: '8px' }}>
-                      <span>Total Expenses:</span> <strong>${activePrintReport.expense.toLocaleString('en-US', {minimumFractionDigits: 2})}</strong>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '16px' }}>
-                      <span>Net Savings:</span> 
-                      <strong className={activePrintReport.net >= 0 ? 'text-success' : 'text-danger'}>
-                        ${activePrintReport.net.toLocaleString('en-US', {minimumFractionDigits: 2})} ({activePrintReport.savingsRate}% Rate)
-                      </strong>
-                  </div>
-              </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', minWidth: '240px', marginLeft: 'auto' }}>
+          <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-muted)', textAlign: 'right' }}>Focus month</label>
+          <select className="glass-input" value={selectedMonth} onChange={(e) => setSelectedMonth(e.target.value)} style={{ minWidth: '220px' }}>
+            {reports.map((report) => (
+              <option key={report.month} value={report.month}>{formatMonth(report.month)}</option>
+            ))}
+          </select>
+        </div>
+      </div>
 
-              {pdfConfig.includeComparison && hasComparisonData && (
-                  <div className="print-card">
-                      <h3>Category Breakdown (vs Previous Month)</h3>
-                      <table className="print-table">
-                          <thead><tr><th>Category</th><th>Spent</th><th>Difference</th></tr></thead>
-                          <tbody>
-                              {activePrintReport.catComparison.map(c => (
-                                  <tr key={c.category}>
-                                      <td>{c.category}</td>
-                                      <td>${c.current.toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
-                                      <td className={c.diff > 0 ? 'text-danger' : 'text-success'}>
-                                          {c.diff > 0 ? '+' : ''}${c.diff.toLocaleString('en-US', {minimumFractionDigits: 2})} ({c.pct}%)
-                                      </td>
-                                  </tr>
-                              ))}
-                          </tbody>
-                      </table>
-                  </div>
-              )}
-
-              {activePrintReport.investments && activePrintReport.investments.length > 0 && (
-                 <div className="print-card">
-                      <h3>Investment Performance</h3>
-                      <table className="print-table">
-                          <thead><tr><th>Asset</th><th>Starting Bal.</th><th>New Contrib.</th><th>Closing Bal.</th><th>MoM Gain/Loss</th></tr></thead>
-                          <tbody>
-                              {activePrintReport.investments.map((inv, i) => (
-                                  <tr key={i}>
-                                      <td><strong>{inv.name}</strong></td>
-                                      <td>${inv.prevBalance.toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
-                                      <td>${inv.contrib.toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
-                                      <td>${inv.balance.toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
-                                      <td className={inv.gainLoss >= 0 ? 'text-success' : 'text-danger'}>
-                                          <strong>{inv.gainLoss >= 0 ? '+' : ''}${inv.gainLoss.toLocaleString('en-US', {minimumFractionDigits: 2})}</strong>
-                                      </td>
-                                  </tr>
-                              ))}
-                          </tbody>
-                      </table>
-                 </div>
-              )}
-
-              {(activePrintReport.transfers.length > 0 || activePrintReport.loans.length > 0) && (
-                 <div className="print-card">
-                      <h3>Capital Movements (Transfers & Lending)</h3>
-                      <table className="print-table">
-                          <thead><tr><th>Type</th><th>Destination / Recipient</th><th>Amount</th></tr></thead>
-                          <tbody>
-                              {activePrintReport.transfers.map((t, i) => (
-                                  <tr key={`t-${i}`}><td>Transfer</td><td>{t.to}</td><td>${t.amt.toLocaleString('en-US', {minimumFractionDigits: 2})}</td></tr>
-                              ))}
-                              {activePrintReport.loans.map((l, i) => (
-                                  <tr key={`l-${i}`}><td>Loan Issued</td><td>{l.to}</td><td>${l.amt.toLocaleString('en-US', {minimumFractionDigits: 2})}</td></tr>
-                              ))}
-                          </tbody>
-                      </table>
-                 </div>
-              )}
-
-              <div className="disclaimer">This financial advice is generated by AI (Vittaparāmarśadātā) and is for informational purposes only. Please consult a certified financial advisor before making financial decisions.</div>
+      {selectedReport && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '16px', marginBottom: '24px' }}>
+          <div className="glass-card" style={{ padding: '18px' }}>
+            <div className="text-muted" style={{ fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.6px' }}>Income</div>
+            <div style={{ fontSize: '1.8rem', fontWeight: 800, marginTop: '8px', color: 'var(--success)' }}>C$ {formatCurrency(selectedReport.income)}</div>
           </div>
+          <div className="glass-card" style={{ padding: '18px' }}>
+            <div className="text-muted" style={{ fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.6px' }}>Expenses</div>
+            <div style={{ fontSize: '1.8rem', fontWeight: 800, marginTop: '8px', color: 'var(--danger)' }}>C$ {formatCurrency(selectedReport.expense)}</div>
+          </div>
+          <div className="glass-card" style={{ padding: '18px' }}>
+            <div className="text-muted" style={{ fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.6px' }}>Net Flow</div>
+            <div style={{ fontSize: '1.8rem', fontWeight: 800, marginTop: '8px', color: Number(selectedReport.net || 0) >= 0 ? 'var(--success)' : 'var(--danger)' }}>C$ {formatCurrency(selectedReport.net)}</div>
+          </div>
+          <div className="glass-card" style={{ padding: '18px' }}>
+            <div className="text-muted" style={{ fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.6px' }}>Savings Rate</div>
+            <div style={{ fontSize: '1.8rem', fontWeight: 800, marginTop: '8px' }}>{selectedReport.savingsRate}%</div>
+          </div>
+        </div>
       )}
 
-
-      {/* --- STANDARD WEB UI LAYER --- */}
-      <div className="no-print">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '40px' }}>
-            <div>
-                <h1 style={{ fontSize: '2.5rem', marginBottom: '8px', fontWeight: 800 }}>Monthly Analytics</h1>
-                <p style={{ color: 'var(--text-muted)', margin: 0, fontSize: '15px' }}>Auto-generated performance tracking.</p>
-            </div>
-            <button onClick={() => setShowPdfModal(true)} className="glass-button glass-button-outline" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 20px', fontWeight: 'bold' }}>
-            📄 Generate Official Report
-            </button>
-        </div>
-
-        {showPdfModal && (
-            <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.8)', zIndex: 1000, display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '20px' }}>
-                <div className="glass-card" style={{ width: '100%', maxWidth: '450px' }}>
-                    <h2 style={{ marginTop: 0, marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '10px' }}>Configure PDF Report</h2>
-                    <label style={{ display: 'block', marginBottom: '8px', color: 'var(--text-muted)', fontWeight: 600, fontSize: '13px' }}>Select Target Month</label>
-                    <select value={pdfConfig.month} onChange={e => setPdfConfig({...pdfConfig, month: e.target.value})} className="glass-input" style={{ width: '100%', marginBottom: '20px', padding: '12px' }}>
-                        {reports.map(r => (<option key={r.month} value={r.month}>{formatMonth(r.month)} {r.isCurrentMonth ? ' (Current - Unfinalized)' : ''}</option>))}
-                    </select>
-                    <div style={{ marginBottom: '24px' }}>
-                        <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', fontSize: '14px' }}>
-                            <input type="checkbox" checked={pdfConfig.includeComparison} onChange={e => setPdfConfig({...pdfConfig, includeComparison: e.target.checked})} style={{ width: '18px', height: '18px' }} />
-                            Include Month-over-Month Comparison Data
-                        </label>
-                    </div>
-
-                    {isCurrentSelected ? (
-                        <div style={{ background: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', padding: '14px', borderRadius: '8px', marginBottom: '24px', fontSize: '13px', lineHeight: 1.5, border: '1px solid rgba(239, 68, 68, 0.3)' }}>
-                            <strong>⚠️ Report Locked</strong><br/>The current month cannot be downloaded until it is officially finalized. Please select a past month to view AI Insights.
-                        </div>
-                    ) : (
-                        <div style={{ display: 'flex', gap: '12px' }}>
-                            <button onClick={executePDFGeneration} disabled={isCurrentSelected} className="glass-button" style={{ flex: 1, opacity: isCurrentSelected ? 0.5 : 1, cursor: isCurrentSelected ? 'not-allowed' : 'pointer' }}>Generate PDF</button>
-                            <button onClick={() => setShowPdfModal(false)} className="glass-button glass-button-outline">Cancel</button>
-                        </div>
-                    )}
-                </div>
-            </div>
-        )}
-
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: '24px' }}>
-            {reports.length === 0 && <p style={{ color: 'var(--text-muted)' }}>No monthly data available yet.</p>}
-            
-            {reports.map((report) => {
-            const isCurrent = report.isCurrentMonth;
-            const netFlow = report.net;
-            const isPositiveFlow = netFlow >= 0;
-            const savingsRate = parseFloat(report.savingsRate);
-            const hitGoal = savingsRate >= 20;
-
-            return (
-                <div key={report.month} className="glass-card" style={{ borderTop: isCurrent ? '4px solid var(--accent-cyan)' : '1px solid var(--border-glass)', position: 'relative' }}>
-                
-                {/* FIXED: Uses isCurrent (calendar logic) instead of array index! */}
-                {isCurrent && <span style={{ position: 'absolute', top: '16px', right: '16px', background: 'var(--accent-cyan)', color: '#000', fontSize: '10px', fontWeight: 'bold', padding: '4px 8px', borderRadius: '12px' }}>CURRENT</span>}
-                
-                {/* AI Trigger Button - Strictly hidden for current calendar month */}
-                {!isCurrent && (
-                   <button 
-                      onClick={() => report.ai_insight ? alert('Your report is ready!') : handleAnalyzeMonth(report.month)}
-                      disabled={analyzingMonth === report.month}
-                      style={{ position: 'absolute', top: '16px', right: '16px', padding: '6px 12px', background: 'var(--bg-base)', color: 'var(--text-muted)', border: '1px solid var(--border-glass)', borderRadius: '20px', fontSize: '11px', cursor: 'pointer', zIndex: 10, transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 'bold' }}
-                   >
-                      {analyzingMonth === report.month ? '🤖 Analyzing...' : '🤖 AI Analysis'}
-                   </button>
-                )}
-
-                <h2 style={{ margin: '0 0 24px 0', fontSize: '1.5rem', fontWeight: 700 }}>{formatMonth(report.month)}</h2>
-                
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
-                    <span style={{ color: 'var(--text-muted)' }}>Inflow</span>
-                    <strong style={{ color: 'var(--success)' }}>C${report.income.toLocaleString('en-US', { minimumFractionDigits: 2 })}</strong>
-                </div>
-
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '16px', paddingBottom: '16px', borderBottom: '1px solid var(--border-glass)' }}>
-                    <span style={{ color: 'var(--text-muted)' }}>Expenses</span>
-                    <strong style={{ color: 'var(--danger)' }}>C${report.expense.toLocaleString('en-US', { minimumFractionDigits: 2 })}</strong>
-                </div>
-
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '24px' }}>
-                    <span style={{ fontWeight: 600, fontSize: '1.1rem' }}>Net Cash Flow</span>
-                    <strong style={{ fontSize: '1.2rem', color: isPositiveFlow ? 'var(--success)' : 'var(--danger)' }}>
-                    {isPositiveFlow ? '+' : ''}C${netFlow.toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                    </strong>
-                </div>
-
-                {/* AI Insight Box with Hide/Show Toggle */}
-                {report.ai_insight && !isCurrent && (
-                  <div style={{ background: 'var(--bg-base)', borderLeft: '4px solid #0284c7', padding: '16px', borderRadius: '4px', marginBottom: '24px', fontSize: '13px', lineHeight: '1.6' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: expandedInsights[report.month] ? '12px' : '0' }}>
-                          <h4 style={{ color: '#0284c7', margin: 0, fontSize: '12px', textTransform: 'uppercase' }}>✨ AI Advisor Insights</h4>
-                          <button onClick={() => toggleInsight(report.month)} style={{ background: 'transparent', border: 'none', color: '#0284c7', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}>
-                              {expandedInsights[report.month] ? 'Hide' : 'Show'}
-                          </button>
-                      </div>
-                      {expandedInsights[report.month] && <div>{formatAIText(report.ai_insight)}</div>}
-                  </div>
-                )}
-
-                <div style={{ marginBottom: '24px' }}>
-                    <h4 style={{ color: 'var(--text-muted)', fontSize: '12px', textTransform: 'uppercase', marginBottom: '12px' }}>Category Changes (vs Previous)</h4>
-                    <div style={{ maxHeight: '150px', overflowY: 'auto', paddingRight: '8px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                        {report.catComparison.length === 0 && <span style={{fontSize: '13px', color: 'var(--text-muted)'}}>No expense data.</span>}
-                        {report.catComparison.map(c => (
-                            <div key={c.category} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', paddingBottom: '8px', borderBottom: '1px dashed rgba(255,255,255,0.05)' }}>
-                                <span>{c.category} <span style={{color: 'var(--text-muted)', fontSize: '11px'}}>${c.current.toFixed(0)}</span></span>
-                                <span style={{ color: c.diff > 0 ? 'var(--danger)' : 'var(--success)' }}>
-                                    {c.diff > 0 ? '▲ ' : '▼ '}${Math.abs(c.diff).toFixed(0)} ({c.pct}%)
-                                </span>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-
-                <div style={{ marginBottom: '24px' }}>
-                    <h4 style={{ color: 'var(--text-muted)', fontSize: '12px', textTransform: 'uppercase', marginBottom: '12px' }}>Activity Volume</h4>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                        {Object.keys(report.accounts).map(acc => (
-                            <span key={acc} style={{ background: 'rgba(255,255,255,0.05)', padding: '4px 10px', borderRadius: '12px', fontSize: '11px', color: 'var(--text-main)' }}>
-                                {acc}: <strong style={{color: 'var(--accent-cyan)'}}>{report.accounts[acc]}</strong>
-                            </span>
-                        ))}
-                    </div>
-                </div>
-
-                <div style={{ background: 'var(--bg-base)', padding: '16px', borderRadius: 'var(--radius-md)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '4px' }}>
-                    <span style={{ color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 'bold' }}>Savings Target</span>
-                    <span style={{ color: hitGoal ? 'var(--success)' : 'var(--warning)', fontWeight: 'bold' }}>{savingsRate}% / 20%</span>
-                    </div>
-                    <div className="progress-bg">
-                    <div className="progress-fill" style={{ width: `${Math.min(savingsRate, 100)}%`, background: hitGoal ? 'var(--success)' : 'var(--warning)' }}></div>
-                    </div>
-                </div>
-
-                </div>
-            );
-            })}
-        </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '24px' }}>
+        {reports.map((report) => (
+          <MonthCard
+            key={report.month}
+            report={report}
+            isSelected={report.month === selectedMonth}
+            onSelect={() => setSelectedMonth(report.month)}
+            onDownload={downloadMonthlySummary}
+            isDownloading={downloadingMonth === report.month}
+          />
+        ))}
       </div>
     </div>
   );

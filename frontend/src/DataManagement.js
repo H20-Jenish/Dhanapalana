@@ -22,8 +22,9 @@
  * - System-wide data consistency
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
+import { showConfirm, showPrompt } from './dialogService';
 
 // --- PREMIUM SVG ICONS ---
 const IconFolder = () => <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>;
@@ -60,6 +61,10 @@ const DataManagement = () => {
   const [recipientBanks, setRecipientBanks] = useState([]);
   const [accountTypes, setAccountTypes] = useState([]);
   const [creditCards, setCreditCards] = useState([]);
+  const [draggingCategoryId, setDraggingCategoryId] = useState(null);
+  const [hoveredCategoryId, setHoveredCategoryId] = useState(null);
+  const categoryOrderSnapshotRef = useRef([]);
+  const categoryDropHandledRef = useRef(false);
   
   const [newCategory, setNewCategory] = useState('');
   const [newBank, setNewBank] = useState('');
@@ -92,7 +97,7 @@ const DataManagement = () => {
   };
 
   const handleEdit = async (endpoint, id, currentName, forceUpper = false) => { 
-    let newName = window.prompt("Edit Name:", currentName); 
+    let newName = await showPrompt("Edit Name:", { title: 'Edit Item', defaultValue: currentName }); 
     if (!newName || newName.trim() === '') return; 
     if (forceUpper) newName = newName.toUpperCase(); 
     try { await axios.put(`${API_URL}/${endpoint}/${id}`, { name: newName }, getAuthHeaders()); fetchData(); } 
@@ -100,28 +105,83 @@ const DataManagement = () => {
   };
 
   const handleDelete = async (endpoint, id) => { 
-    if (!window.confirm("Are you sure you want to delete this?")) return; 
+    if (!(await showConfirm("Are you sure you want to delete this?", { title: 'Confirm Delete' }))) return; 
     try { await axios.delete(`${API_URL}/${endpoint}/${id}`, getAuthHeaders()); fetchData(); } 
     catch (err) { alert("Cannot delete item in use."); } 
   };
 
+  const handleCategoryDragStart = (id) => {
+    categoryOrderSnapshotRef.current = categories;
+    categoryDropHandledRef.current = false;
+    setDraggingCategoryId(id);
+  };
+
+  const handleCategoryDragOver = (e, id) => {
+    e.preventDefault();
+    if (draggingCategoryId !== id) setHoveredCategoryId(id);
+  };
+
+  const handleCategoryDragEnter = (targetId) => {
+    if (!draggingCategoryId || draggingCategoryId === targetId) return;
+
+    setCategories((current) => {
+      const next = [...current];
+      const fromIndex = next.findIndex((item) => item.id === draggingCategoryId);
+      const toIndex = next.findIndex((item) => item.id === targetId);
+      if (fromIndex === -1 || toIndex === -1 || fromIndex === toIndex) return current;
+
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved);
+      return next;
+    });
+    setHoveredCategoryId(targetId);
+  };
+
+  const handleCategoryDrop = async (targetId) => {
+    if (!draggingCategoryId) return;
+
+    categoryDropHandledRef.current = true;
+    const next = [...categories];
+
+    try {
+      await axios.post(`${API_URL}/categories/reorder`, { categoryIds: next.map(item => item.id) }, getAuthHeaders());
+    } catch (err) {
+      alert('Unable to save category order.');
+      fetchData();
+    } finally {
+      setDraggingCategoryId(null);
+      setHoveredCategoryId(null);
+      categoryOrderSnapshotRef.current = [];
+    }
+  };
+
+  const handleCategoryDragEnd = () => {
+    if (!categoryDropHandledRef.current && categoryOrderSnapshotRef.current.length > 0) {
+      setCategories(categoryOrderSnapshotRef.current);
+    }
+    setDraggingCategoryId(null);
+    setHoveredCategoryId(null);
+    categoryOrderSnapshotRef.current = [];
+    categoryDropHandledRef.current = false;
+  };
+
   const handleAddCredit = async (e) => { 
     e.preventDefault(); 
-    const name = window.prompt("Enter new Credit Card name (e.g., AMEX):"); if (!name) return; 
-    const limit = window.prompt("Enter Credit Limit (CAD):"); if (!limit || isNaN(limit)) return alert("Invalid limit"); 
+    const name = await showPrompt("Enter new Credit Card name (e.g., AMEX):", { title: 'Add Credit Card' }); if (!name) return; 
+    const limit = await showPrompt("Enter Credit Limit (CAD):", { title: 'Add Credit Card', defaultValue: '0.00' }); if (!limit || isNaN(limit)) return alert("Invalid limit"); 
     try { await axios.post(`${API_URL}/credit-cards`, { name: name.toUpperCase(), limit_amount: limit }, getAuthHeaders()); fetchData(); } 
     catch (err) { alert("Error adding credit card"); } 
   };
 
   const handleEditCredit = async (id, currentName, currentLimit) => { 
-    let newName = window.prompt("Edit Card Name:", currentName); if (!newName) return; 
-    let newLimit = window.prompt("Edit Credit Limit (CAD):", currentLimit); if (!newLimit || isNaN(newLimit)) return; 
+    let newName = await showPrompt("Edit Card Name:", { title: 'Edit Credit Card', defaultValue: currentName }); if (!newName) return; 
+    let newLimit = await showPrompt("Edit Credit Limit (CAD):", { title: 'Edit Credit Card', defaultValue: String(currentLimit) }); if (!newLimit || isNaN(newLimit)) return; 
     try { await axios.put(`${API_URL}/credit-cards/${id}`, { name: newName.toUpperCase(), limit_amount: newLimit }, getAuthHeaders()); fetchData(); } 
     catch (err) { alert("Error updating card"); } 
   };
 
   const handleSoftReset = async () => {
-    if (!window.confirm("⚠️ WARNING: This will delete ALL transactions, incomes, expenses, investments, and AI insights. Account balances will be reset to $0.\n\nYour categories, banks, settings, and users WILL BE SAVED.\n\nAre you sure you want to proceed?")) return;
+    if (!(await showConfirm("⚠️ WARNING: This will delete ALL transactions, incomes, expenses, investments, and AI insights. Account balances will be reset to $0.\n\nYour categories, banks, settings, and users WILL BE SAVED.\n\nAre you sure you want to proceed?", { title: 'Confirm Soft Reset' }))) return;
     setIsResetting(true);
     try {
       await axios.post(`${API_URL}/system/soft-reset`, {}, getAuthHeaders());
@@ -136,7 +196,36 @@ const DataManagement = () => {
     <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
       {data.map(item => (
         <li key={item.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 0', borderBottom: '1px solid rgba(150,150,150,0.1)' }}>
-          <span style={{ fontWeight: 500, fontSize: '15px' }}>{item.name}</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
+            <button
+              type="button"
+              draggable={endpoint === 'categories'}
+              onDragStart={() => handleCategoryDragStart(item.id)}
+              onDragEnd={handleCategoryDragEnd}
+              onMouseDown={() => handleCategoryDragStart(item.id)}
+              className="glass-button"
+              style={{
+                width: '34px',
+                height: '34px',
+                borderRadius: '10px',
+                display: endpoint === 'categories' ? 'flex' : 'none',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: 0,
+                cursor: 'grab',
+                flexShrink: 0,
+              }}
+              aria-label={`Reorder ${item.name}`}
+              title="Drag to reorder"
+            >
+              <span style={{ display: 'grid', gap: '3px' }}>
+                <span style={{ width: '14px', height: '2px', borderRadius: '999px', background: 'currentColor', opacity: 0.7 }} />
+                <span style={{ width: '14px', height: '2px', borderRadius: '999px', background: 'currentColor', opacity: 0.7 }} />
+                <span style={{ width: '14px', height: '2px', borderRadius: '999px', background: 'currentColor', opacity: 0.7 }} />
+              </span>
+            </button>
+            <span style={{ fontWeight: 500, fontSize: '15px', wordBreak: 'break-word' }}>{item.name}</span>
+          </div>
           <div style={{ display: 'flex', gap: '10px' }}>
             <button onClick={() => handleEdit(endpoint, item.id, item.name, forceUpper)} className="glass-button glass-button-warning" style={{ padding: '6px 14px', fontSize: '12px', borderRadius: '6px' }}>Edit</button>
             <button onClick={() => handleDelete(endpoint, item.id)} className="glass-button glass-button-danger" style={{ padding: '6px 14px', fontSize: '12px', borderRadius: '6px' }}>Delete</button>
@@ -177,7 +266,60 @@ const DataManagement = () => {
             <input type="text" placeholder="e.g., Groceries, Utilities" value={newCategory} onChange={e => setNewCategory(e.target.value)} required className="glass-input" style={{ flex: 1 }} />
             <button type="submit" className="glass-button" style={{ padding: '0 24px' }}>Add</button>
           </form>
-          {renderList(categories, 'categories', false)}
+          <div style={{ marginBottom: '12px', fontSize: '12px', color: 'var(--text-muted)' }}>Drag the handle to reorder categories. Reports follow this same order.</div>
+          <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+            {categories.map((item) => (
+              <li
+                key={item.id}
+                onDragOver={(e) => handleCategoryDragOver(e, item.id)}
+                onDragEnter={() => handleCategoryDragEnter(item.id)}
+                onDrop={() => handleCategoryDrop(item.id)}
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  padding: '16px 0',
+                  borderBottom: '1px solid rgba(150,150,150,0.1)',
+                  background: hoveredCategoryId === item.id ? 'rgba(255,255,255,0.03)' : 'transparent',
+                  transition: 'background 0.15s ease',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
+                  <button
+                    type="button"
+                    draggable
+                    onDragStart={() => handleCategoryDragStart(item.id)}
+                    onDragEnd={handleCategoryDragEnd}
+                    className="glass-button"
+                    style={{
+                      width: '34px',
+                      height: '34px',
+                      borderRadius: '10px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      padding: 0,
+                      cursor: 'grab',
+                      flexShrink: 0,
+                    }}
+                    aria-label={`Drag ${item.name} to reorder`}
+                    title="Drag to reorder"
+                  >
+                    <span style={{ display: 'grid', gap: '3px' }}>
+                      <span style={{ width: '14px', height: '2px', borderRadius: '999px', background: 'currentColor', opacity: 0.7 }} />
+                      <span style={{ width: '14px', height: '2px', borderRadius: '999px', background: 'currentColor', opacity: 0.7 }} />
+                      <span style={{ width: '14px', height: '2px', borderRadius: '999px', background: 'currentColor', opacity: 0.7 }} />
+                    </span>
+                  </button>
+                  <span style={{ fontWeight: 500, fontSize: '15px', wordBreak: 'break-word' }}>{item.name}</span>
+                </div>
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  <button onClick={() => handleEdit('categories', item.id, item.name, false)} className="glass-button glass-button-warning" style={{ padding: '6px 14px', fontSize: '12px', borderRadius: '6px' }}>Edit</button>
+                  <button onClick={() => handleDelete('categories', item.id)} className="glass-button glass-button-danger" style={{ padding: '6px 14px', fontSize: '12px', borderRadius: '6px' }}>Delete</button>
+                </div>
+              </li>
+            ))}
+          </ul>
         </ModalWrapper>
       )}
 
