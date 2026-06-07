@@ -105,7 +105,7 @@ services:
       - TZ=${APP_TIMEZONE:-America/Toronto}
     ports:
       - "80:80"    # HTTP port
-      - "443:443"  # HTTPS port
+      - "4043:443"  # HTTPS port
     volumes:
       - ./nginx_setup/nginx.conf:/etc/nginx/nginx.conf:ro  # Nginx configuration
       - ./nginx_setup/nginx-certs:/etc/nginx/ssl:ro  # SSL certificates

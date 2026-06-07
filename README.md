@@ -92,8 +92,8 @@ Dhanapalana is a full-stack web application designed to help individuals track, 
    ```
 
 5. **🌐 Access the application:**
-   - App (recommended): `https://localhost`
-   - API base via Nginx: `https://localhost/api`
+   - App (recommended): `https://localhost:4043`
+   - API base via Nginx: `https://localhost:4043/api`
    - Direct container ports for backend/frontend are not published by default in this compose setup
 
 6. **🔧 Stop the application:**
@@ -260,6 +260,10 @@ For support and questions:
 - Added per-card "Download Summary" action in Monthly Reports UI to export detailed month data.
 - Added investment log keeper support and reminder scheduling enhancements (time + timezone + per-asset cadence).
 - Replaced remaining native popup behavior with in-app modal dialog flows.
+
+### 2026-06-07
+- Changed HTTPS host port mapping from `443` to `4043` (`4043:443`) for the Nginx service.
+- Updated backend CORS allowlist to include `https://localhost:4043` and `https://127.0.0.1:4043` (plus HTTP variants) to fix login failures after the port change.
 
 ### 2026-05-02 (In-progress updates)
 - Added `query_examples` persistence table and prompt example storage.
