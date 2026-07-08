@@ -74,7 +74,8 @@ body {
 
 .glass-input { padding: 12px 16px; border-radius: var(--radius-md); border: 1px solid var(--border-glass); background: #000000; color: var(--text-main); flex: 1; min-width: 150px; outline: none; transition: all 0.2s; }
 .glass-input:focus { border-color: var(--accent-cyan); }
-.glass-input-date::-webkit-calendar-picker-indicator { filter: invert(1); cursor: pointer; opacity: 0.7; }
+.glass-input-date { color-scheme: dark; }
+.glass-input-date::-webkit-calendar-picker-indicator { cursor: pointer; opacity: 0.95; }
 .glass-input-date::-webkit-calendar-picker-indicator:hover { opacity: 1; }
 .glass-input option, .glass-input optgroup { background: var(--bg-glass); color: var(--text-main); }
 

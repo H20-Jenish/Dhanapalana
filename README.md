@@ -19,6 +19,9 @@ Dhanapalana is a full-stack web application designed to help individuals track, 
 - **📱 Telegram Integration**: Remote financial queries via Telegram bot
 - **🔔 Investment Reminder Engine**: Per-asset reminder cadence (daily/weekly/biweekly/monthly/custom days) with Telegram delivery
 - **🧾 Investment Log Keeper**: Per-investment historical value/contribution log with gain/loss tracking
+- **💼 Stock Holdings View**: Dedicated holdings modal with per-symbol invested amount, shares, current price/value, and unrealized return
+- **🧮 Stock Update Workflows**: Structured update flow for additional purchases and dividend reinvestments with auto-calculated shares (editable)
+- **🗂️ Unified Investment Timeline**: Logs view now combines performance logs and activity updates in one readable timeline
 - **🪟 Consistent Modal UX**: Native browser popups replaced by in-app modal dialogs for confirm/prompt/alert flows
 - **🎨 Responsive Design**: Modern glassmorphism UI optimized for desktop and mobile
 - **📈 Data Visualization**: Interactive charts and graphs using Recharts
@@ -141,6 +144,9 @@ If you want to run the frontend and backend separately for development:
 
 ### 📈 Investments & Reminders
 - `GET /api/investments/:id/logs` - Investment log history for an asset
+- `GET /api/investments/:id/activity` - Investment activity history (asset creation/update/delete and position events)
+- `GET /api/investments/:id/holdings/live` - Live per-symbol holdings metrics for stock/ETF assets
+- `POST /api/investments/:id/positions` - Add stock/ETF position event (initial/additional purchase/dividend reinvestment)
 - `GET /api/investment-reminders` - List per-asset reminder settings
 - `POST /api/investment-reminders` - Create or update per-asset reminder settings
 - `GET /api/system-settings/investment-reminders` - Read global reminder send time and timezone
@@ -274,6 +280,15 @@ For support and questions:
 - Improved Admin UI button visibility and added a loading spinner during SQL generation.
 - Added backend fallback generation path when SQL generation returns empty output, with expanded prompt handling.
 - Note: SQL generation may still fail for some prompts; investigation and debugging are paused until the next session.
+
+### 2026-07-08
+- Redesigned Investment cards to a uniform premium layout with consistent visual height and better metric hierarchy.
+- Added stock/ETF holdings modal for clear per-symbol visibility (invested amount, shares, current price, current value, unrealized return).
+- Added structured stock update flow with two mutually exclusive actions: additional purchase and dividend reinvestment.
+- Extended investment position events with `transaction_type` to track initial purchase, additional purchase, and dividend reinvestment.
+- Unified Log Keeper timeline by combining performance logs and investment activity entries in one stream.
+- Replaced raw JSON log rendering with human-readable sections for changed values, old values, and new values.
+- Improved activity logging coverage for investment edits, including deleted performance logs.
 
 ---
 

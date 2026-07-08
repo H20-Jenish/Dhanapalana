@@ -150,6 +150,10 @@ const runMigrations = async () => {
         CREATE TABLE IF NOT EXISTS lending (id SERIAL PRIMARY KEY, source_account_id INTEGER REFERENCES savings_accounts(id), recipient TEXT, recipient_bank_id INTEGER REFERENCES recipient_banks(id), amount DECIMAL(15,2), repaid DECIMAL(15,2) DEFAULT 0, method TEXT, date DATE, status TEXT DEFAULT 'ACTIVE');
         CREATE TABLE IF NOT EXISTS investments (id SERIAL PRIMARY KEY, name TEXT NOT NULL, bank_id INTEGER REFERENCES banks(id), type TEXT NOT NULL, status TEXT DEFAULT 'ACTIVE');
         CREATE TABLE IF NOT EXISTS investment_logs (id SERIAL PRIMARY KEY, investment_id INTEGER REFERENCES investments(id), date DATE NOT NULL, balance DECIMAL(15,2) NOT NULL, net_contribution DECIMAL(15,2) DEFAULT 0.00, status TEXT DEFAULT 'ACTIVE');
+        CREATE TABLE IF NOT EXISTS type_of_assets (id SERIAL PRIMARY KEY, name TEXT UNIQUE NOT NULL);
+        CREATE TABLE IF NOT EXISTS investment_types (id SERIAL PRIMARY KEY, name TEXT UNIQUE NOT NULL);
+        CREATE TABLE IF NOT EXISTS investment_positions (id SERIAL PRIMARY KEY, investment_id INTEGER REFERENCES investments(id) ON DELETE CASCADE, ticker TEXT NOT NULL, unit_price DECIMAL(15,4) NOT NULL, amount DECIMAL(15,2) NOT NULL, quantity DECIMAL(20,8) NOT NULL, purchase_date DATE DEFAULT CURRENT_DATE, priced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, price_source TEXT DEFAULT 'manual', transaction_type TEXT DEFAULT 'INITIAL_PURCHASE', status TEXT DEFAULT 'ACTIVE');
+        CREATE TABLE IF NOT EXISTS investment_activity_logs (id SERIAL PRIMARY KEY, investment_id INTEGER REFERENCES investments(id) ON DELETE CASCADE, action_type TEXT NOT NULL, summary TEXT NOT NULL, metadata JSONB DEFAULT '{}'::jsonb, actor TEXT DEFAULT 'system', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS investment_reminder_settings (id SERIAL PRIMARY KEY, investment_id INTEGER UNIQUE REFERENCES investments(id) ON DELETE CASCADE, is_enabled BOOLEAN DEFAULT FALSE, frequency_days INTEGER DEFAULT 30, last_sent_on DATE, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS notifications (id SERIAL PRIMARY KEY, message TEXT NOT NULL, is_read BOOLEAN DEFAULT FALSE, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS audit_logs (id SERIAL PRIMARY KEY, action_details TEXT NOT NULL, timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
@@ -165,10 +169,18 @@ const runMigrations = async () => {
       await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`);
       await pool.query(`ALTER TABLE categories ADD COLUMN IF NOT EXISTS sort_order INTEGER;`);
       await pool.query(`ALTER TABLE investments ADD COLUMN IF NOT EXISTS account_type_id INTEGER REFERENCES account_types(id);`);
+      await pool.query(`ALTER TABLE investments ADD COLUMN IF NOT EXISTS type_of_asset_id INTEGER REFERENCES type_of_assets(id);`);
+      await pool.query(`ALTER TABLE investments ADD COLUMN IF NOT EXISTS investment_type_id INTEGER REFERENCES investment_types(id);`);
+      await pool.query(`ALTER TABLE investments ALTER COLUMN type DROP NOT NULL;`);
+      await pool.query(`ALTER TABLE savings_accounts ADD COLUMN IF NOT EXISTS is_system_managed BOOLEAN DEFAULT FALSE;`);
+      await pool.query(`ALTER TABLE savings_accounts ADD COLUMN IF NOT EXISTS management_source TEXT;`);
+      await pool.query(`ALTER TABLE savings_accounts ADD COLUMN IF NOT EXISTS linked_investment_id INTEGER REFERENCES investments(id);`);
       await pool.query(`ALTER TABLE investment_reminder_settings ADD COLUMN IF NOT EXISTS is_enabled BOOLEAN DEFAULT FALSE;`);
       await pool.query(`ALTER TABLE investment_reminder_settings ADD COLUMN IF NOT EXISTS frequency_days INTEGER DEFAULT 30;`);
       await pool.query(`ALTER TABLE investment_reminder_settings ADD COLUMN IF NOT EXISTS last_sent_on DATE;`);
       await pool.query(`ALTER TABLE investment_reminder_settings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`);
+      await pool.query(`ALTER TABLE investment_positions ADD COLUMN IF NOT EXISTS purchase_date DATE DEFAULT CURRENT_DATE;`);
+      await pool.query(`ALTER TABLE investment_positions ADD COLUMN IF NOT EXISTS transaction_type TEXT DEFAULT 'INITIAL_PURCHASE';`);
       await pool.query(`UPDATE users SET role = 'admin' WHERE id = (SELECT MIN(id) FROM users)`);
       
       const catCount = await pool.query('SELECT COUNT(*) FROM categories');
@@ -180,6 +192,17 @@ const runMigrations = async () => {
       if (parseInt(accCount.rows[0].count) === 0) { 
         await pool.query(`INSERT INTO account_types (name) VALUES ('Savings'), ('Checking'), ('Investment')`); 
       }
+
+      await pool.query(`
+        INSERT INTO type_of_assets (name)
+        VALUES ('FHSA'), ('TFSA'), ('RRSP'), ('RESP'), ('Non-Registered')
+        ON CONFLICT (name) DO NOTHING
+      `);
+      await pool.query(`
+        INSERT INTO investment_types (name)
+        VALUES ('Stocks/ETFs'), ('Crypto'), ('Real Estate'), ('Mutual Funds')
+        ON CONFLICT (name) DO NOTHING
+      `);
 
       await initJwtSecret();
       break; 
@@ -208,6 +231,83 @@ const sanitizeSqlFile = (filePath) => {
     content = content.replace(/^\\restrict.*$/gm, '-- Removed restrict command');
     fs.writeFileSync(filePath, content);
   } catch (err) {}
+};
+
+const parseNumber = (value, fallback = 0) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const quoteCache = new Map();
+const QUOTE_CACHE_TTL_MS = 5000;
+
+const fetchYahooQuote = async (tickerInput, options = {}) => {
+  const symbol = String(tickerInput || '').trim().toUpperCase();
+  if (!symbol) throw new Error('Ticker symbol is required.');
+
+  const useCache = options.useCache !== false;
+  if (useCache) {
+    const cached = quoteCache.get(symbol);
+    if (cached && (Date.now() - cached.cachedAt) < QUOTE_CACHE_TTL_MS) {
+      return cached.payload;
+    }
+  }
+
+  const commonHeaders = {
+    'User-Agent': 'Mozilla/5.0 (compatible; Dhanapalana/1.0; +https://localhost)',
+    'Accept': 'application/json,text/plain,*/*',
+  };
+
+  try {
+    const response = await axios.get('https://query1.finance.yahoo.com/v7/finance/quote', {
+      params: { symbols: symbol },
+      timeout: 8000,
+      headers: commonHeaders,
+    });
+
+    const quote = response?.data?.quoteResponse?.result?.[0];
+    const price = parseNumber(quote?.regularMarketPrice, NaN);
+    if (Number.isFinite(price) && price > 0) {
+      const payload = {
+        symbol,
+        price,
+        source: 'yahoo-finance-quote',
+        pricedAt: quote?.regularMarketTime ? new Date(quote.regularMarketTime * 1000).toISOString() : new Date().toISOString(),
+      };
+      quoteCache.set(symbol, { payload, cachedAt: Date.now() });
+      return payload;
+    }
+  } catch (err) {}
+
+  // Fallback path: Yahoo quote API can return Unauthorized in some regions.
+  const chartResponse = await axios.get(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}`, {
+    params: { range: '1d', interval: '1m' },
+    timeout: 8000,
+    headers: commonHeaders,
+  });
+
+  const chartMeta = chartResponse?.data?.chart?.result?.[0]?.meta;
+  const timestamps = chartResponse?.data?.chart?.result?.[0]?.timestamp || [];
+  const closes = chartResponse?.data?.chart?.result?.[0]?.indicators?.quote?.[0]?.close || [];
+  const latestClose = [...closes].reverse().find((v) => Number.isFinite(parseNumber(v, NaN)));
+  const price = parseNumber(chartMeta?.regularMarketPrice, parseNumber(latestClose, NaN));
+
+  if (!Number.isFinite(price) || price <= 0) {
+    throw new Error(`Unable to fetch quote for ticker ${symbol} at this time.`);
+  }
+
+  const marketTime = chartMeta?.regularMarketTime
+    ? new Date(chartMeta.regularMarketTime * 1000).toISOString()
+    : (timestamps.length > 0 ? new Date(timestamps[timestamps.length - 1] * 1000).toISOString() : new Date().toISOString());
+
+  const payload = {
+    symbol,
+    price,
+    source: 'yahoo-finance-chart',
+    pricedAt: marketTime,
+  };
+  quoteCache.set(symbol, { payload, cachedAt: Date.now() });
+  return payload;
 };
 
 const sendTelegramMessage = async (text) => {
@@ -246,6 +346,26 @@ const notifyAdmin = async (message, sendToTelegram = false) => {
       await sendTelegramMessage(message);
     }
   } catch(e) {}
+};
+
+const logInvestmentActivity = async ({ investmentId, actionType, summary, metadata = {}, actor = 'system' }) => {
+  try {
+    await pool.query(
+      'INSERT INTO investment_activity_logs (investment_id, action_type, summary, metadata, actor) VALUES ($1, $2, $3, $4::jsonb, $5)',
+      [investmentId, actionType, summary, JSON.stringify(metadata || {}), actor]
+    );
+  } catch (err) {}
+};
+
+const assertNotInvestmentManagedAccount = async (accountId, purpose = 'this operation') => {
+  if (!accountId) return;
+  const locked = (await pool.query(
+    "SELECT id FROM savings_accounts WHERE id = $1 AND is_system_managed = TRUE AND management_source = 'INVESTMENT'",
+    [accountId]
+  )).rows[0];
+  if (locked) {
+    throw new Error(`Investment-managed account cannot be used for ${purpose}.`);
+  }
 };
 
 const isAuthenticated = (req, res, next) => {
@@ -302,9 +422,13 @@ app.post('/api/system/soft-reset', isAdmin, async (req, res) => {
     await pool.query('DELETE FROM expenses'); 
     await pool.query('DELETE FROM transfers'); 
     await pool.query('DELETE FROM lending'); 
+    await pool.query('DELETE FROM investment_activity_logs');
+    await pool.query('DELETE FROM investment_positions');
+    await pool.query('DELETE FROM investment_reminder_settings');
     await pool.query('DELETE FROM investment_logs'); 
     await pool.query('DELETE FROM investments'); 
-    await pool.query('UPDATE savings_accounts SET balance = 0'); 
+    await pool.query("DELETE FROM savings_accounts WHERE is_system_managed = TRUE AND management_source = 'INVESTMENT'");
+    await pool.query('UPDATE savings_accounts SET balance = 0 WHERE COALESCE(is_system_managed, FALSE) = FALSE'); 
     await pool.query('UPDATE credit_cards SET balance = 0'); 
     await pool.query('DELETE FROM notifications');
     await pool.query('COMMIT');
@@ -674,15 +798,32 @@ createAdminRoutes('recipient-banks', 'recipient_banks');
 
 app.get('/api/recipient-banks', async (req, res) => { try { res.json((await pool.query('SELECT * FROM recipient_banks ORDER BY name')).rows); } catch (err) { res.status(500).json({ error: err.message }); } });
 createAdminRoutes('account-types', 'account_types');
+createAdminRoutes('type-of-assets', 'type_of_assets');
+createAdminRoutes('investment-types', 'investment_types');
 
 app.get('/api/account-types', async (req, res) => { try { res.json((await pool.query('SELECT * FROM account_types ORDER BY name')).rows); } catch (err) { res.status(500).json({ error: err.message }); } });
+app.get('/api/type-of-assets', async (req, res) => { try { res.json((await pool.query('SELECT * FROM type_of_assets ORDER BY name')).rows); } catch (err) { res.status(500).json({ error: err.message }); } });
+app.get('/api/investment-types', async (req, res) => { try { res.json((await pool.query('SELECT * FROM investment_types ORDER BY name')).rows); } catch (err) { res.status(500).json({ error: err.message }); } });
+
+app.get('/api/investments/quote', async (req, res) => {
+  const ticker = String(req.query.ticker || '').trim();
+  if (!ticker) return res.status(400).json({ error: 'Ticker is required.' });
+  try {
+    const quote = await fetchYahooQuote(ticker);
+    res.json(quote);
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
 
 app.get('/api/credit-cards', async (req, res) => { try { res.json((await pool.query('SELECT * FROM credit_cards ORDER BY name')).rows); } catch (err) { res.status(500).json({ error: err.message }); } });
 app.post('/api/credit-cards', isAdmin, async (req, res) => { try { res.json((await pool.query('INSERT INTO credit_cards (name, limit_amount) VALUES ($1, $2) RETURNING *', [req.body.name, req.body.limit_amount])).rows[0]); await logAction(`Credit Card minted: ${req.body.name}`); } catch (err) { res.status(500).json({ error: err.message }); } });
 app.put('/api/credit-cards/:id', isAdmin, async (req, res) => { try { res.json((await pool.query('UPDATE credit_cards SET name = $1, limit_amount = $2 WHERE id = $3 RETURNING *', [req.body.name, req.body.limit_amount, req.params.id])).rows[0]); await logAction(`Credit Card modified: ID ${req.params.id}`); } catch (err) { res.status(500).json({ error: err.message }); } });
 app.delete('/api/credit-cards/:id', isAdmin, async (req, res) => { try { await pool.query('DELETE FROM credit_cards WHERE id = $1', [req.params.id]); await logAction(`Credit Card deleted: ID ${req.params.id}`); res.json({ success: true }); } catch (err) { res.status(500).json({ error: 'In use.' }); } });
 app.post('/api/credit-cards/:id/repay', async (req, res) => { const { account_id, amount, date } = req.body;
-    try { const ccName = (await pool.query('SELECT name FROM credit_cards WHERE id = $1', [req.params.id])).rows[0].name;
+  try {
+    await assertNotInvestmentManagedAccount(account_id, 'credit card repayment');
+    const ccName = (await pool.query('SELECT name FROM credit_cards WHERE id = $1', [req.params.id])).rows[0].name;
         if (account_id) await pool.query('UPDATE savings_accounts SET balance = balance - $1 WHERE id = $2', [amount, account_id]);
         await pool.query('UPDATE credit_cards SET balance = balance - $1 WHERE id = $2', [amount, req.params.id]);
         const transferResult = await pool.query('INSERT INTO transfers (source_account_id, recipient, amount, exchange_rate, inr_amount, method, date) VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, CURRENT_DATE)) RETURNING *', [account_id || null, `CC: ${ccName}`, amount, 1.00, amount, 'Credit Card Repayment', date || null]);
@@ -690,19 +831,136 @@ app.post('/api/credit-cards/:id/repay', async (req, res) => { const { account_id
         res.json(transferResult.rows[0]);
       } catch (err) { res.status(500).json({ error: err.message }); } });
 
-app.get('/api/investments', async (req, res) => { try { res.json((await pool.query(`SELECT i.id, i.name, i.type, i.bank_id, i.account_type_id, b.name as bank_name, act.name as account_type_name, COALESCE((SELECT balance FROM investment_logs il WHERE il.investment_id = i.id AND il.status != 'DELETED' ORDER BY date DESC, id DESC LIMIT 1), 0) as current_balance, COALESCE((SELECT SUM(net_contribution) FROM investment_logs il WHERE il.investment_id = i.id AND il.status != 'DELETED'), 0) as total_contributed, (SELECT date FROM investment_logs il WHERE il.investment_id = i.id AND il.status != 'DELETED' ORDER BY date DESC, id DESC LIMIT 1) as last_log_date FROM investments i LEFT JOIN banks b ON i.bank_id = b.id LEFT JOIN account_types act ON i.account_type_id = act.id WHERE i.status != 'DELETED' ORDER BY i.id DESC`)).rows); } catch (err) { res.status(500).json({ error: err.message }); } });
-app.post('/api/investments', async (req, res) => { try { await pool.query('BEGIN'); const result = await pool.query('INSERT INTO investments (name, bank_id, account_type_id, type) VALUES ($1, $2, $3, $4) RETURNING *', [req.body.name, req.body.bank_id || null, req.body.account_type_id || null, req.body.type]);
-        const newInv = result.rows[0];
-        if (req.body.initial_amount && req.body.initial_amount !== '') {
-            const logDate = req.body.date || new Date().toISOString().split('T')[0];
-            await pool.query('INSERT INTO investment_logs (investment_id, date, balance, net_contribution) VALUES ($1, $2, $3, $4)', [newInv.id, logDate, req.body.initial_amount, req.body.initial_amount]);
+app.get('/api/investments', async (req, res) => { try { res.json((await pool.query(`SELECT i.id, i.name, i.type, i.bank_id, i.account_type_id, i.type_of_asset_id, i.investment_type_id, (SELECT MIN(il.date) FROM investment_logs il WHERE il.investment_id = i.id AND il.status != 'DELETED') as asset_date, b.name as bank_name, act.name as account_type_name, toa.name as type_of_asset_name, it.name as investment_type_name, COALESCE((SELECT balance FROM investment_logs il WHERE il.investment_id = i.id AND il.status != 'DELETED' ORDER BY date DESC, id DESC LIMIT 1), 0) as current_balance, COALESCE((SELECT SUM(net_contribution) FROM investment_logs il WHERE il.investment_id = i.id AND il.status != 'DELETED'), 0) as total_contributed, (SELECT date FROM investment_logs il WHERE il.investment_id = i.id AND il.status != 'DELETED' ORDER BY date DESC, id DESC LIMIT 1) as last_log_date, sa.id as linked_account_id FROM investments i LEFT JOIN banks b ON i.bank_id = b.id LEFT JOIN account_types act ON i.account_type_id = act.id LEFT JOIN type_of_assets toa ON i.type_of_asset_id = toa.id LEFT JOIN investment_types it ON i.investment_type_id = it.id LEFT JOIN savings_accounts sa ON sa.linked_investment_id = i.id AND sa.management_source = 'INVESTMENT' WHERE i.status != 'DELETED' ORDER BY i.id DESC`)).rows); } catch (err) { res.status(500).json({ error: err.message }); } });
+app.post('/api/investments', async (req, res) => {
+  try {
+    await pool.query('BEGIN');
+
+    const positions = Array.isArray(req.body.positions) ? req.body.positions : [];
+    const typeOfAssetId = req.body.type_of_asset_id || req.body.account_type_id || null;
+    const investmentTypeId = req.body.investment_type_id || null;
+    let initialAmount = parseNumber(req.body.initial_amount, 0);
+    const assetDate = req.body.date || new Date().toISOString().split('T')[0];
+    const logDate = assetDate;
+
+    const investmentTypeRow = investmentTypeId
+      ? (await pool.query('SELECT id, name FROM investment_types WHERE id = $1', [investmentTypeId])).rows[0]
+      : null;
+    const normalizedType = req.body.type || investmentTypeRow?.name || 'Investment';
+
+    const typeOfAssetRow = typeOfAssetId
+      ? (await pool.query('SELECT id, name FROM type_of_assets WHERE id = $1', [typeOfAssetId])).rows[0]
+      : null;
+    const assetName = String(req.body.name || '').trim() || typeOfAssetRow?.name || normalizedType;
+
+    if (!assetName) {
+      await pool.query('ROLLBACK');
+      return res.status(400).json({ error: 'Asset name could not be derived from Type of Asset.' });
+    }
+
+    const result = await pool.query(
+      'INSERT INTO investments (name, bank_id, account_type_id, type, type_of_asset_id, investment_type_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+      [assetName, req.body.bank_id || null, req.body.account_type_id || null, normalizedType, typeOfAssetId, investmentTypeId]
+    );
+    const newInv = result.rows[0];
+
+    const shouldAutoPricePositions = investmentTypeRow && investmentTypeRow.name.toLowerCase() === 'stocks/etfs' && positions.length > 0;
+    if (shouldAutoPricePositions) {
+      initialAmount = 0;
+      for (const pos of positions) {
+        const ticker = String(pos.ticker || '').trim().toUpperCase();
+        if (!ticker) continue;
+        const amount = parseNumber(pos.amount, 0);
+        if (amount <= 0) continue;
+        const purchaseDate = String(pos.purchase_date || assetDate || '').trim() || assetDate;
+        const manualUnitPrice = parseNumber(pos.unit_price, NaN);
+        let unitPrice = manualUnitPrice;
+        let priceSource = 'manual-entry';
+        let pricedAt = `${purchaseDate}T00:00:00.000Z`;
+
+        if (!Number.isFinite(unitPrice) || unitPrice <= 0) {
+          const quote = await fetchYahooQuote(ticker);
+          unitPrice = quote.price;
+          priceSource = quote.source;
+          pricedAt = quote.pricedAt;
         }
-        await pool.query('COMMIT');
-        notifyAdmin(`Investment Account Created: ${req.body.name}`);
-        res.json(newInv);
-    } catch (err) { await pool.query('ROLLBACK'); res.status(500).json({ error: err.message }); } });
+
+        const quantity = amount / unitPrice;
+        await pool.query(
+          'INSERT INTO investment_positions (investment_id, ticker, unit_price, amount, quantity, purchase_date, price_source, priced_at, transaction_type) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
+          [newInv.id, ticker, unitPrice, amount, quantity, purchaseDate, priceSource, pricedAt, 'INITIAL_PURCHASE']
+        );
+        initialAmount += amount;
+      }
+    }
+
+    const sourceAccountId = req.body.source_account_id || null;
+    if (sourceAccountId && initialAmount > 0) {
+      const sourceAccRes = await pool.query('SELECT id, balance FROM savings_accounts WHERE id = $1 FOR UPDATE', [sourceAccountId]);
+      if (sourceAccRes.rows.length === 0) {
+        await pool.query('ROLLBACK');
+        return res.status(400).json({ error: 'Source bank account not found.' });
+      }
+      if (parseNumber(sourceAccRes.rows[0].balance, 0) < initialAmount) {
+        await pool.query('ROLLBACK');
+        return res.status(400).json({ error: 'Insufficient source bank account balance for initial investment transfer.' });
+      }
+      await pool.query('UPDATE savings_accounts SET balance = balance - $1 WHERE id = $2', [initialAmount, sourceAccountId]);
+    }
+
+    const investmentAccountType = (await pool.query(`SELECT id FROM account_types WHERE LOWER(name) = 'investment' ORDER BY id ASC LIMIT 1`)).rows[0];
+    const linkedSavings = await pool.query(
+      'INSERT INTO savings_accounts (bank_id, account_type_id, currency, balance, is_system_managed, management_source, linked_investment_id) VALUES ($1, $2, $3, $4, TRUE, $5, $6) RETURNING *',
+      [req.body.bank_id || null, investmentAccountType?.id || null, 'CAD', initialAmount, 'INVESTMENT', newInv.id]
+    );
+
+    if (initialAmount > 0) {
+      await pool.query(
+        'INSERT INTO investment_logs (investment_id, date, balance, net_contribution) VALUES ($1, $2, $3, $4)',
+        [newInv.id, logDate, initialAmount, initialAmount]
+      );
+    }
+
+    if (sourceAccountId && initialAmount > 0) {
+      await pool.query(
+        'INSERT INTO transfers (source_account_id, recipient, amount, exchange_rate, inr_amount, method, date) VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, CURRENT_DATE))',
+        [sourceAccountId, `Investment: ${assetName}`, initialAmount, 1.00, initialAmount, 'Investment Transfer', assetDate || null]
+      );
+    }
+
+    await logInvestmentActivity({
+      investmentId: newInv.id,
+      actionType: 'ASSET_CREATED',
+      summary: `Investment asset ${assetName} created with initial amount C$${initialAmount.toFixed(2)}.`,
+      metadata: {
+        source_account_id: sourceAccountId,
+        linked_account_id: linkedSavings.rows[0].id,
+        positions_count: positions.length,
+        asset_date: assetDate,
+      },
+      actor: req.user?.username || 'system',
+    });
+
+    await pool.query('COMMIT');
+    notifyAdmin(`Investment Account Created: ${assetName}`);
+    res.json({ ...newInv, linked_account_id: linkedSavings.rows[0].id, initial_amount: initialAmount });
+  } catch (err) {
+    await pool.query('ROLLBACK');
+    res.status(500).json({ error: err.message });
+  }
+});
 app.delete('/api/investments/:id', async (req, res) => { try { const oldInv = (await pool.query(`SELECT i.name, i.type, COALESCE((SELECT balance FROM investment_logs il WHERE il.investment_id = i.id AND il.status != 'DELETED' ORDER BY date DESC, id DESC LIMIT 1), 0) as latest_amount FROM investments i WHERE i.id = $1`, [req.params.id])).rows[0];
         await pool.query(`UPDATE investments SET status='DELETED' WHERE id=$1`, [req.params.id]);
+        await pool.query("DELETE FROM savings_accounts WHERE linked_investment_id = $1 AND management_source = 'INVESTMENT'", [req.params.id]);
+        if (oldInv) {
+          await logInvestmentActivity({
+            investmentId: Number(req.params.id),
+            actionType: 'ASSET_DELETED',
+            summary: `Investment asset ${oldInv.name} was deleted.`,
+            metadata: { latest_amount: parseNumber(oldInv.latest_amount, 0), type: oldInv.type },
+            actor: req.user?.username || 'system',
+          });
+        }
         if (oldInv) notifyAdmin(`🗑️ Investment asset "${oldInv.name}" (${oldInv.type}) worth C$${parseFloat(oldInv.latest_amount).toFixed(2)} has been deleted.`, true);
         res.json({success:true});
     } catch (e) { res.status(500).json({error: e.message}); } });
@@ -720,6 +978,282 @@ app.get('/api/investments/:id/logs', async (req, res) => {
       [req.params.id]
     );
     res.json(logs.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+app.get('/api/investments/:id/positions', async (req, res) => {
+  try {
+    const rows = (await pool.query(
+      `SELECT id, investment_id, ticker, unit_price, amount, quantity, purchase_date, price_source, priced_at, transaction_type
+       FROM investment_positions
+       WHERE investment_id = $1 AND status != 'DELETED'
+       ORDER BY id DESC`,
+      [req.params.id]
+    )).rows;
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+app.post('/api/investments/:id/positions', async (req, res) => {
+  const ticker = String(req.body.ticker || '').trim().toUpperCase();
+  const amount = parseNumber(req.body.amount, 0);
+  if (!ticker || amount <= 0) return res.status(400).json({ error: 'Ticker and amount are required.' });
+
+  try {
+    await pool.query('BEGIN');
+    const investment = (await pool.query("SELECT id, name FROM investments WHERE id = $1 AND status != 'DELETED'", [req.params.id])).rows[0];
+    if (!investment) {
+      await pool.query('ROLLBACK');
+      return res.status(404).json({ error: 'Investment not found.' });
+    }
+
+    const rawActionType = String(req.body.action_type || 'ADDITIONAL_PURCHASE').trim().toUpperCase();
+    const validActionTypes = new Set(['INITIAL_PURCHASE', 'ADDITIONAL_PURCHASE', 'DIVIDEND_REINVESTMENT']);
+    if (!validActionTypes.has(rawActionType)) {
+      await pool.query('ROLLBACK');
+      return res.status(400).json({ error: 'Invalid action_type provided.' });
+    }
+
+    const purchaseDate = String(req.body.purchase_date || new Date().toISOString().split('T')[0]).trim();
+    const manualUnitPrice = parseNumber(req.body.unit_price, NaN);
+    let unitPrice = manualUnitPrice;
+    let priceSource = 'manual-entry';
+    let pricedAt = `${purchaseDate}T00:00:00.000Z`;
+
+    if (!Number.isFinite(unitPrice) || unitPrice <= 0) {
+      const quote = await fetchYahooQuote(ticker);
+      unitPrice = quote.price;
+      priceSource = quote.source;
+      pricedAt = quote.pricedAt;
+    }
+
+    const manualQuantity = parseNumber(req.body.quantity, NaN);
+    const quantity = Number.isFinite(manualQuantity) && manualQuantity > 0 ? manualQuantity : (amount / unitPrice);
+
+    const prevHoldingRow = (await pool.query(
+      `SELECT
+         COALESCE(SUM(ip.amount), 0) AS total_amount,
+         COALESCE(SUM(ip.quantity), 0) AS total_quantity
+       FROM investment_positions ip
+       WHERE ip.investment_id = $1
+         AND ip.ticker = $2
+         AND ip.status != 'DELETED'`,
+      [req.params.id, ticker]
+    )).rows[0];
+    const prevInvested = parseNumber(prevHoldingRow?.total_amount, 0);
+    const prevShares = parseNumber(prevHoldingRow?.total_quantity, 0);
+
+    const inserted = (await pool.query(
+      'INSERT INTO investment_positions (investment_id, ticker, unit_price, amount, quantity, purchase_date, price_source, priced_at, transaction_type) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *',
+      [req.params.id, ticker, unitPrice, amount, quantity, purchaseDate, priceSource, pricedAt, rawActionType]
+    )).rows[0];
+
+    const latestBalanceRow = (await pool.query("SELECT COALESCE(balance, 0) AS balance FROM investment_logs WHERE investment_id = $1 AND status != 'DELETED' ORDER BY date DESC, id DESC LIMIT 1", [req.params.id])).rows[0];
+    const prevBalance = parseNumber(latestBalanceRow?.balance, 0);
+    const nextBalance = prevBalance + amount;
+    await pool.query('INSERT INTO investment_logs (investment_id, date, balance, net_contribution) VALUES ($1, $2, $3, $4)', [req.params.id, purchaseDate, nextBalance, amount]);
+
+    const linkedAccount = (await pool.query("SELECT id FROM savings_accounts WHERE linked_investment_id = $1 AND management_source = 'INVESTMENT'", [req.params.id])).rows[0];
+    if (linkedAccount) {
+      await pool.query('UPDATE savings_accounts SET balance = $1 WHERE id = $2', [nextBalance, linkedAccount.id]);
+    }
+
+    const nextInvested = prevInvested + amount;
+    const nextShares = prevShares + quantity;
+    const actionLabel = rawActionType === 'DIVIDEND_REINVESTMENT'
+      ? 'dividend reinvestment'
+      : (rawActionType === 'ADDITIONAL_PURCHASE' ? 'additional purchase' : 'initial purchase');
+
+    await logInvestmentActivity({
+      investmentId: Number(req.params.id),
+      actionType: rawActionType,
+      summary: `Recorded ${actionLabel} for ${ticker}: C$${amount.toFixed(2)} at C$${unitPrice.toFixed(4)}.`,
+      metadata: {
+        ticker,
+        date: purchaseDate,
+        action_type: rawActionType,
+        change: {
+          amount: Number(amount.toFixed(2)),
+          unit_price: Number(unitPrice.toFixed(4)),
+          shares_added: Number(quantity.toFixed(8)),
+        },
+        old_values: {
+          invested_amount: Number(prevInvested.toFixed(2)),
+          total_shares: Number(prevShares.toFixed(8)),
+          investment_balance: Number(prevBalance.toFixed(2)),
+        },
+        new_values: {
+          invested_amount: Number(nextInvested.toFixed(2)),
+          total_shares: Number(nextShares.toFixed(8)),
+          investment_balance: Number(nextBalance.toFixed(2)),
+        },
+      },
+      actor: req.user?.username || 'system',
+    });
+
+    await pool.query('COMMIT');
+    res.json(inserted);
+  } catch (err) {
+    await pool.query('ROLLBACK');
+    res.status(500).json({ error: err.message });
+  }
+});
+app.get('/api/investments/:id/activity', async (req, res) => {
+  try {
+    const rows = (await pool.query(
+      `SELECT id, investment_id, action_type, summary, metadata, actor, created_at
+       FROM investment_activity_logs
+       WHERE investment_id = $1
+       ORDER BY created_at DESC, id DESC
+       LIMIT 80`,
+      [req.params.id]
+    )).rows;
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+app.get('/api/investments/live-values', async (req, res) => {
+  try {
+    const positionRows = (await pool.query(`
+      SELECT
+        ip.investment_id,
+        ip.ticker,
+        SUM(ip.quantity) AS total_quantity
+      FROM investment_positions ip
+      JOIN investments i ON i.id = ip.investment_id
+      LEFT JOIN investment_types it ON it.id = i.investment_type_id
+      WHERE ip.status != 'DELETED'
+        AND i.status != 'DELETED'
+        AND LOWER(COALESCE(it.name, i.type, '')) = 'stocks/etfs'
+      GROUP BY ip.investment_id, ip.ticker
+      ORDER BY ip.investment_id ASC
+    `)).rows;
+
+    if (positionRows.length === 0) {
+      return res.json({ generated_at: new Date().toISOString(), values: [] });
+    }
+
+    const uniqueTickers = [...new Set(positionRows.map((r) => String(r.ticker || '').toUpperCase()).filter(Boolean))];
+    const quoteEntries = await Promise.all(uniqueTickers.map(async (ticker) => {
+      try {
+        const quote = await fetchYahooQuote(ticker, { useCache: true });
+        return [ticker, quote];
+      } catch (err) {
+        return [ticker, null];
+      }
+    }));
+    const quoteByTicker = new Map(quoteEntries);
+
+    const totals = new Map();
+    for (const row of positionRows) {
+      const invId = Number(row.investment_id);
+      const ticker = String(row.ticker || '').toUpperCase();
+      const qty = parseNumber(row.total_quantity, 0);
+      const quote = quoteByTicker.get(ticker);
+      if (!quote || qty <= 0) continue;
+
+      if (!totals.has(invId)) {
+        totals.set(invId, {
+          investment_id: invId,
+          live_balance: 0,
+          priced_at: quote.pricedAt,
+          source: quote.source,
+        });
+      }
+      const bucket = totals.get(invId);
+      bucket.live_balance += (qty * quote.price);
+      if (quote.pricedAt > bucket.priced_at) bucket.priced_at = quote.pricedAt;
+    }
+
+    const values = [...totals.values()].map((v) => ({
+      investment_id: v.investment_id,
+      live_balance: Number(v.live_balance.toFixed(2)),
+      priced_at: v.priced_at,
+      source: v.source,
+    }));
+
+    res.json({ generated_at: new Date().toISOString(), values });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+app.get('/api/investments/:id/holdings/live', async (req, res) => {
+  try {
+    const investment = (await pool.query(
+      `SELECT i.id, i.name, COALESCE(it.name, i.type, '') AS investment_kind
+       FROM investments i
+       LEFT JOIN investment_types it ON it.id = i.investment_type_id
+       WHERE i.id = $1 AND i.status != 'DELETED'`,
+      [req.params.id]
+    )).rows[0];
+    if (!investment) return res.status(404).json({ error: 'Investment not found.' });
+
+    const rows = (await pool.query(
+      `SELECT
+         ip.ticker,
+         COALESCE(SUM(ip.amount), 0) AS total_amount_invested,
+         COALESCE(SUM(ip.quantity), 0) AS total_shares,
+         MIN(ip.purchase_date) AS first_transaction_date,
+         MAX(ip.purchase_date) AS last_transaction_date
+       FROM investment_positions ip
+       WHERE ip.investment_id = $1
+         AND ip.status != 'DELETED'
+       GROUP BY ip.ticker
+       ORDER BY ip.ticker ASC`,
+      [req.params.id]
+    )).rows;
+
+    if (rows.length === 0) {
+      return res.json({ generated_at: new Date().toISOString(), investment_id: Number(req.params.id), holdings: [] });
+    }
+
+    const quoteEntries = await Promise.all(rows.map(async (row) => {
+      const symbol = String(row.ticker || '').trim().toUpperCase();
+      if (!symbol) return [symbol, null];
+      try {
+        const quote = await fetchYahooQuote(symbol, { useCache: true });
+        return [symbol, quote];
+      } catch (err) {
+        return [symbol, null];
+      }
+    }));
+    const quoteByTicker = new Map(quoteEntries);
+
+    const holdings = rows.map((row) => {
+      const symbol = String(row.ticker || '').trim().toUpperCase();
+      const investedAmount = parseNumber(row.total_amount_invested, 0);
+      const totalShares = parseNumber(row.total_shares, 0);
+      const quote = quoteByTicker.get(symbol);
+      const currentPrice = quote ? parseNumber(quote.price, 0) : 0;
+      const currentValue = currentPrice > 0 ? (currentPrice * totalShares) : 0;
+      const unrealizedGain = currentValue - investedAmount;
+      const returnPct = investedAmount > 0 ? ((unrealizedGain / investedAmount) * 100) : 0;
+
+      return {
+        ticker: symbol,
+        security_name: symbol,
+        investment_name: investment.name,
+        total_amount_invested: Number(investedAmount.toFixed(2)),
+        total_shares: Number(totalShares.toFixed(8)),
+        current_price: Number(currentPrice.toFixed(4)),
+        current_value: Number(currentValue.toFixed(2)),
+        unrealized_gain: Number(unrealizedGain.toFixed(2)),
+        return_pct: Number(returnPct.toFixed(2)),
+        first_transaction_date: row.first_transaction_date,
+        last_transaction_date: row.last_transaction_date,
+        quote_source: quote?.source || null,
+        priced_at: quote?.pricedAt || null,
+      };
+    });
+
+    res.json({
+      generated_at: new Date().toISOString(),
+      investment_id: Number(req.params.id),
+      holdings,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -795,17 +1329,59 @@ app.post('/api/investment-reminders', isAdmin, async (req, res) => {
 });
 
 app.post('/api/investment-logs', async (req, res) => { try { const r = await pool.query('INSERT INTO investment_logs (investment_id, date, balance, net_contribution) VALUES ($1, $2, $3, $4) RETURNING *', [req.body.investment_id, req.body.date, req.body.balance, req.body.net_contribution || 0]);
+        const linked = (await pool.query("SELECT id FROM savings_accounts WHERE linked_investment_id = $1 AND management_source = 'INVESTMENT'", [req.body.investment_id])).rows[0];
+        if (linked) {
+          await pool.query('UPDATE savings_accounts SET balance = $1 WHERE id = $2', [req.body.balance, linked.id]);
+        }
+        await logInvestmentActivity({
+          investmentId: Number(req.body.investment_id),
+          actionType: 'MANUAL_LOG',
+          summary: `Manual investment log saved with balance C$${parseNumber(req.body.balance, 0).toFixed(2)}.`,
+          metadata: { date: req.body.date, net_contribution: parseNumber(req.body.net_contribution, 0) },
+          actor: req.user?.username || 'system',
+        });
         notifyAdmin(`Investment Logged: Month balance updated`);
         res.json(r.rows[0]);
     } catch (err) { res.status(500).json({ error: err.message }); } });
-app.delete('/api/investment-logs/:id', async (req, res) => { try { await pool.query(`UPDATE investment_logs SET status='DELETED' WHERE id=$1`, [req.params.id]);
-        res.json({success:true});
-    } catch (e) { res.status(500).json({error: e.message}); } });
+app.delete('/api/investment-logs/:id', async (req, res) => {
+  try {
+    const existing = (await pool.query('SELECT id, investment_id, date, balance, net_contribution FROM investment_logs WHERE id = $1', [req.params.id])).rows[0];
+    if (!existing) return res.status(404).json({ error: 'Investment log not found.' });
 
-app.get('/api/savings', async (req, res) => { res.json((await pool.query(`SELECT s.*, b.name as bank_name, act.name as account_type FROM savings_accounts s JOIN banks b ON s.bank_id = b.id LEFT JOIN account_types act ON s.account_type_id = act.id ORDER BY s.id DESC`)).rows); });
+    await pool.query(`UPDATE investment_logs SET status='DELETED' WHERE id=$1`, [req.params.id]);
+
+    await logInvestmentActivity({
+      investmentId: Number(existing.investment_id),
+      actionType: 'PERFORMANCE_LOG_DELETED',
+      summary: `Deleted manual performance log from ${existing.date}.`,
+      metadata: {
+        deleted_log_id: Number(existing.id),
+        old_values: {
+          date: existing.date,
+          balance: parseNumber(existing.balance, 0),
+          net_contribution: parseNumber(existing.net_contribution, 0),
+        },
+      },
+      actor: req.user?.username || 'system',
+    });
+
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/savings', async (req, res) => { res.json((await pool.query(`SELECT s.*, b.name as bank_name, act.name as account_type, i.name as linked_investment_name FROM savings_accounts s JOIN banks b ON s.bank_id = b.id LEFT JOIN account_types act ON s.account_type_id = act.id LEFT JOIN investments i ON s.linked_investment_id = i.id ORDER BY s.id DESC`)).rows); });
 app.post('/api/savings', isAdmin, async (req, res) => { res.json((await pool.query('INSERT INTO savings_accounts (bank_id, account_type_id, currency, balance) VALUES ($1, $2, $3, $4) RETURNING *', [req.body.bank_id, req.body.account_type_id || null, req.body.currency, req.body.balance || 0.00])).rows[0]); notifyAdmin("New Bank Account Added."); });
-app.put('/api/savings/:id', isAdmin, async (req, res) => { res.json((await pool.query('UPDATE savings_accounts SET bank_id=$1, account_type_id=$2, currency=$3, balance=$4 WHERE id=$5 RETURNING *', [req.body.bank_id, req.body.account_type_id || null, req.body.currency, req.body.balance, req.params.id])).rows[0]); });
-app.delete('/api/savings/:id', isAdmin, async (req, res) => { try { const oldAcc = (await pool.query('SELECT b.name as bank_name, act.name as account_type FROM savings_accounts s JOIN banks b ON s.bank_id = b.id LEFT JOIN account_types act ON s.account_type_id = act.id WHERE s.id = $1', [req.params.id])).rows[0];
+app.put('/api/savings/:id', isAdmin, async (req, res) => {
+  const locked = (await pool.query("SELECT id FROM savings_accounts WHERE id = $1 AND is_system_managed = TRUE AND management_source = 'INVESTMENT'", [req.params.id])).rows[0];
+  if (locked) return res.status(403).json({ error: 'This account is managed by Investments and cannot be edited from Bank Accounts.' });
+  res.json((await pool.query('UPDATE savings_accounts SET bank_id=$1, account_type_id=$2, currency=$3, balance=$4 WHERE id=$5 RETURNING *', [req.body.bank_id, req.body.account_type_id || null, req.body.currency, req.body.balance, req.params.id])).rows[0]);
+});
+app.delete('/api/savings/:id', isAdmin, async (req, res) => { try { const oldAcc = (await pool.query('SELECT b.name as bank_name, act.name as account_type, s.is_system_managed, s.management_source FROM savings_accounts s JOIN banks b ON s.bank_id = b.id LEFT JOIN account_types act ON s.account_type_id = act.id WHERE s.id = $1', [req.params.id])).rows[0];
+        if (oldAcc?.is_system_managed && oldAcc?.management_source === 'INVESTMENT') {
+          return res.status(403).json({ error: 'This account is managed by Investments and cannot be deleted from Bank Accounts.' });
+        }
         await pool.query('DELETE FROM savings_accounts WHERE id=$1', [req.params.id]);
         if (oldAcc) notifyAdmin(`🗑️ The bank account of type "${oldAcc.account_type || 'Unknown'}" from "${oldAcc.bank_name}" has been deleted.`, true);
         res.json({success: true});
@@ -813,6 +1389,11 @@ app.delete('/api/savings/:id', isAdmin, async (req, res) => { try { const oldAcc
 app.post('/api/savings/internal-transfer', async (req, res) => { const { from_account_id, to_account_id, amount } = req.body;
     if (!from_account_id || !to_account_id || !amount) return res.status(400).json({ error: 'Missing details.' });
     try { await pool.query('BEGIN');
+        const lockedRoute = (await pool.query("SELECT id FROM savings_accounts WHERE id = ANY($1::int[]) AND is_system_managed = TRUE AND management_source = 'INVESTMENT'", [[Number(from_account_id), Number(to_account_id)]])).rows;
+        if (lockedRoute.length > 0) {
+          await pool.query('ROLLBACK');
+          return res.status(403).json({ error: 'Investment-managed accounts cannot be used in Internal Transfer.' });
+        }
         const fromAcc = await pool.query('SELECT s.id, b.name as bank_name, act.name as account_type FROM savings_accounts s JOIN banks b ON s.bank_id = b.id LEFT JOIN account_types act ON s.account_type_id = act.id WHERE s.id = $1', [from_account_id]);
         const toAcc = await pool.query('SELECT s.id, b.name as bank_name, act.name as account_type FROM savings_accounts s JOIN banks b ON s.bank_id = b.id LEFT JOIN account_types act ON s.account_type_id = act.id WHERE s.id = $1', [to_account_id]);
         await pool.query('UPDATE savings_accounts SET balance = balance - $1 WHERE id = $2', [amount, from_account_id]);
@@ -825,7 +1406,8 @@ app.post('/api/savings/internal-transfer', async (req, res) => { const { from_ac
     } catch (err) { await pool.query('ROLLBACK'); res.status(500).json({ error: err.message }); } });
 
 app.get('/api/income', async (req, res) => { res.json((await pool.query(`SELECT i.*, b.name as bank_name, act.name as account_type FROM income i LEFT JOIN savings_accounts s ON i.account_id = s.id LEFT JOIN banks b ON s.bank_id = b.id LEFT JOIN account_types act ON s.account_type_id = act.id ORDER BY i.date DESC`)).rows); });
-app.post('/api/income', async (req, res) => { try { const result = await pool.query('INSERT INTO income (source, amount, account_id, date) VALUES ($1, $2, $3, COALESCE($4, CURRENT_DATE)) RETURNING *', [req.body.source, req.body.amount, req.body.account_id || null, req.body.date || null]);
+app.post('/api/income', async (req, res) => { try { await assertNotInvestmentManagedAccount(req.body.account_id, 'income deposit');
+  const result = await pool.query('INSERT INTO income (source, amount, account_id, date) VALUES ($1, $2, $3, COALESCE($4, CURRENT_DATE)) RETURNING *', [req.body.source, req.body.amount, req.body.account_id || null, req.body.date || null]);
         let targetName = 'Vault';
         if (req.body.account_id) {
             await pool.query('UPDATE savings_accounts SET balance = balance + $1 WHERE id = $2', [req.body.amount, req.body.account_id]);
@@ -837,6 +1419,8 @@ app.post('/api/income', async (req, res) => { try { const result = await pool.qu
     } catch (err) { res.status(500).json({ error: err.message }); } });
 app.put('/api/income/:id', async (req, res) => { try { await pool.query('BEGIN');
         const old = (await pool.query('SELECT * FROM income WHERE id = $1', [req.params.id])).rows[0];
+  await assertNotInvestmentManagedAccount(old?.account_id, 'income edit rollback');
+  await assertNotInvestmentManagedAccount(req.body.account_id, 'income update');
         if (old.account_id) await pool.query('UPDATE savings_accounts SET balance = balance - $1 WHERE id = $2', [old.amount, old.account_id]);
         const result = await pool.query(`UPDATE income SET source=$1, amount=$2, account_id=$3, date=COALESCE($4, CURRENT_DATE), status='EDITED' WHERE id=$5 RETURNING *`, [req.body.source, req.body.amount, req.body.account_id || null, req.body.date || null, req.params.id]);
         if (req.body.account_id) await pool.query('UPDATE savings_accounts SET balance = balance + $1 WHERE id = $2', [req.body.amount, req.body.account_id]);
@@ -847,6 +1431,7 @@ app.put('/api/income/:id', async (req, res) => { try { await pool.query('BEGIN')
 app.delete('/api/income/:id', async (req, res) => { try { await pool.query('BEGIN');
         const old = (await pool.query('SELECT i.*, b.name as bank, act.name as type, cc.name as cc_name FROM income i LEFT JOIN savings_accounts s ON i.account_id = s.id LEFT JOIN banks b ON s.bank_id = b.id LEFT JOIN account_types act ON s.account_type_id = act.id LEFT JOIN credit_cards cc ON e.credit_card_id = cc.id WHERE i.id = $1', [req.params.id])).rows[0];
         if (!old) return res.status(404).json({error: "Not found"});
+  await assertNotInvestmentManagedAccount(old.account_id, 'income delete rollback');
         if (old.account_id) await pool.query('UPDATE savings_accounts SET balance = balance - $1 WHERE id = $2', [old.amount, old.account_id]);
         if (old.credit_card_id) await pool.query('UPDATE credit_cards SET balance = balance - $1 WHERE id = $2', [old.amount, old.credit_card_id]);
         await pool.query(`UPDATE income SET status='DELETED' WHERE id=$1`, [req.params.id]);
@@ -858,7 +1443,8 @@ app.delete('/api/income/:id', async (req, res) => { try { await pool.query('BEGI
 
 app.get('/api/expenses', async (req, res) => { res.json((await pool.query(`SELECT e.*, c.name as category, b.name as bank_name, act.name as account_type, cc.name as credit_card_name FROM expenses e JOIN categories c ON e.category_id = c.id LEFT JOIN savings_accounts s ON e.account_id = s.id LEFT JOIN banks b ON s.bank_id = b.id LEFT JOIN account_types act ON s.account_type_id = act.id LEFT JOIN credit_cards cc ON e.credit_card_id = cc.id ORDER BY e.date DESC`)).rows); });
 app.post('/api/expenses', async (req, res) => { const { amount, category_id, account_id, credit_card_id, description, date } = req.body;
-    try { const result = await pool.query('INSERT INTO expenses (amount, category_id, account_id, credit_card_id, description, date) VALUES ($1, $2, $3, $4, $5, COALESCE($6, CURRENT_DATE)) RETURNING *', [amount, category_id, account_id || null, credit_card_id || null, description, date || null]);
+  try { await assertNotInvestmentManagedAccount(account_id, 'expense posting');
+    const result = await pool.query('INSERT INTO expenses (amount, category_id, account_id, credit_card_id, description, date) VALUES ($1, $2, $3, $4, $5, COALESCE($6, CURRENT_DATE)) RETURNING *', [amount, category_id, account_id || null, credit_card_id || null, description, date || null]);
         if (account_id) await pool.query('UPDATE savings_accounts SET balance = balance - $1 WHERE id = $2', [amount, account_id]);
         else if (credit_card_id) await pool.query('UPDATE credit_cards SET balance = balance + $1 WHERE id = $2', [amount, credit_card_id]);
         let catName = 'Uncategorized';
@@ -873,9 +1459,11 @@ app.post('/api/expenses', async (req, res) => { const { amount, category_id, acc
     } catch (err) { res.status(500).json({ error: err.message }); } });
 app.put('/api/expenses/:id', async (req, res) => { try { await pool.query('BEGIN');
         const old = (await pool.query('SELECT * FROM expenses WHERE id = $1', [req.params.id])).rows[0];
+  await assertNotInvestmentManagedAccount(old?.account_id, 'expense edit rollback');
         if (old.account_id) await pool.query('UPDATE savings_accounts SET balance = balance + $1 WHERE id = $2', [old.amount, old.account_id]);
         if (old.credit_card_id) await pool.query('UPDATE credit_cards SET balance = balance - $1 WHERE id = $2', [old.amount, old.credit_card_id]);
         const { amount, category_id, account_id, credit_card_id, description, date } = req.body;
+  await assertNotInvestmentManagedAccount(account_id, 'expense update');
         const result = await pool.query(`UPDATE expenses SET amount=$1, category_id=$2, account_id=$3, credit_card_id=$4, description=$5, date=COALESCE($6, CURRENT_DATE), status='EDITED' WHERE id=$7 RETURNING *`, [amount, category_id, account_id || null, credit_card_id || null, description, date || null, req.params.id]);
         if (account_id) await pool.query('UPDATE savings_accounts SET balance = balance - $1 WHERE id = $2', [amount, account_id]);
         if (credit_card_id) await pool.query('UPDATE credit_cards SET balance = balance + $1 WHERE id = $2', [amount, credit_card_id]);
@@ -885,6 +1473,7 @@ app.put('/api/expenses/:id', async (req, res) => { try { await pool.query('BEGIN
 app.delete('/api/expenses/:id', async (req, res) => { try { await pool.query('BEGIN');
         const old = (await pool.query('SELECT e.*, c.name as cat, b.name as bank, act.name as type, cc.name as cc_name FROM expenses e JOIN categories c ON e.category_id = c.id LEFT JOIN savings_accounts s ON e.account_id = s.id LEFT JOIN banks b ON s.bank_id = b.id LEFT JOIN account_types act ON s.account_type_id = act.id LEFT JOIN credit_cards cc ON e.credit_card_id = cc.id WHERE e.id = $1', [req.params.id])).rows[0];
         if (!old) return res.status(404).json({error: "Not found"});
+  await assertNotInvestmentManagedAccount(old.account_id, 'expense delete rollback');
         if (old.account_id) await pool.query('UPDATE savings_accounts SET balance = balance + $1 WHERE id = $2', [old.amount, old.account_id]);
         if (old.credit_card_id) await pool.query('UPDATE credit_cards SET balance = balance - $1 WHERE id = $2', [old.amount, old.credit_card_id]);
         await pool.query(`UPDATE expenses SET status='DELETED' WHERE id=$1`, [req.params.id]);
@@ -896,6 +1485,7 @@ app.delete('/api/expenses/:id', async (req, res) => { try { await pool.query('BE
 
 app.get('/api/transfers', async (req, res) => { res.json((await pool.query(`SELECT t.*, rb.name as recipient_bank, b.name as source_bank, act.name as source_account_type FROM transfers t LEFT JOIN savings_accounts s ON t.source_account_id = s.id LEFT JOIN banks b ON s.bank_id = b.id LEFT JOIN account_types act ON s.account_type_id = act.id LEFT JOIN recipient_banks rb ON t.recipient_bank_id = rb.id ORDER BY t.date DESC`)).rows); });
 app.post('/api/transfers', async (req, res) => { try { const inr_amount = req.body.amount * req.body.exchange_rate;
+  await assertNotInvestmentManagedAccount(req.body.source_account_id, 'transfer source');
         const result = await pool.query('INSERT INTO transfers (source_account_id, recipient, recipient_bank_id, amount, exchange_rate, inr_amount, method, date) VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, CURRENT_DATE)) RETURNING *', [req.body.source_account_id || null, req.body.recipient, req.body.recipient_bank_id || null, req.body.amount, req.body.exchange_rate, inr_amount, req.body.method, req.body.date || null]);
         if (req.body.source_account_id) await pool.query('UPDATE savings_accounts SET balance = balance - $1 WHERE id = $2', [req.body.amount, req.body.source_account_id]);
         notifyAdmin(`Transfer Logged.`);
@@ -903,9 +1493,11 @@ app.post('/api/transfers', async (req, res) => { try { const inr_amount = req.bo
     } catch (err) { res.status(500).json({ error: err.message }); } });
 app.put('/api/transfers/:id', async (req, res) => { try { await pool.query('BEGIN');
         const old = (await pool.query('SELECT * FROM transfers WHERE id = $1', [req.params.id])).rows[0];
+  await assertNotInvestmentManagedAccount(old?.source_account_id, 'transfer edit rollback');
         if (old.source_account_id) await pool.query('UPDATE savings_accounts SET balance = balance + $1 WHERE id = $2', [old.amount, old.source_account_id]);
         if (old.method === 'Credit Card Repayment') await pool.query('UPDATE credit_cards SET balance = balance + $1 WHERE name = $2', [old.amount, old.recipient.replace('CC: ', '')]);
         const { source_account_id, recipient, recipient_bank_id, amount, exchange_rate, method, date } = req.body;
+  await assertNotInvestmentManagedAccount(source_account_id, 'transfer update source');
         const inr_amount = amount * (exchange_rate || 1);
         const result = await pool.query(`UPDATE transfers SET source_account_id=$1, recipient=$2, recipient_bank_id=$3, amount=$4, exchange_rate=$5, inr_amount=$6, method=$7, date=COALESCE($8, CURRENT_DATE), status='EDITED' WHERE id=$9 RETURNING *`, [source_account_id || null, recipient, recipient_bank_id || null, amount, exchange_rate || 1, inr_amount, method, date || null, req.params.id]);
         if (source_account_id) await pool.query('UPDATE savings_accounts SET balance = balance - $1 WHERE id = $2', [amount, source_account_id]);
@@ -915,6 +1507,7 @@ app.put('/api/transfers/:id', async (req, res) => { try { await pool.query('BEGI
     } catch (e) { await pool.query('ROLLBACK'); res.status(500).json({error: e.message}); } });
 app.delete('/api/transfers/:id', async (req, res) => { try { await pool.query('BEGIN');
         const old = (await pool.query('SELECT t.*, b.name as bank FROM transfers t LEFT JOIN savings_accounts s ON t.source_account_id = s.id LEFT JOIN banks b ON s.bank_id = b.id WHERE t.id = $1', [req.params.id])).rows[0];
+  await assertNotInvestmentManagedAccount(old?.source_account_id, 'transfer delete rollback');
         if (old.source_account_id) await pool.query('UPDATE savings_accounts SET balance = balance + $1 WHERE id = $2', [old.amount, old.source_account_id]);
         if (old.method === 'Credit Card Repayment') await pool.query('UPDATE credit_cards SET balance = balance + $1 WHERE name = $2', [old.amount, old.recipient.replace('CC: ', '')]);
         await pool.query(`UPDATE transfers SET status='DELETED' WHERE id=$1`, [req.params.id]);
@@ -924,15 +1517,18 @@ app.delete('/api/transfers/:id', async (req, res) => { try { await pool.query('B
     } catch (e) { await pool.query('ROLLBACK'); res.status(500).json({error: e.message}); } });
 
 app.get('/api/lending', async (req, res) => { res.json((await pool.query(`SELECT l.*, b.name as source_bank, act.name as source_account_type, rb.name as recipient_bank_name FROM lending l LEFT JOIN savings_accounts s ON l.source_account_id = s.id LEFT JOIN banks b ON s.bank_id = b.id LEFT JOIN account_types act ON s.account_type_id = act.id LEFT JOIN recipient_banks rb ON l.recipient_bank_id = rb.id ORDER BY l.date DESC`)).rows); });
-app.post('/api/lending', async (req, res) => { try { const result = await pool.query('INSERT INTO lending (source_account_id, recipient, recipient_bank_id, amount, method, date) VALUES ($1, $2, $3, $4, $5, COALESCE($6, CURRENT_DATE)) RETURNING *', [req.body.source_account_id || null, req.body.recipient, req.body.recipient_bank_id || null, req.body.amount, req.body.method, req.body.date || null]);
+app.post('/api/lending', async (req, res) => { try { await assertNotInvestmentManagedAccount(req.body.source_account_id, 'lending source');
+  const result = await pool.query('INSERT INTO lending (source_account_id, recipient, recipient_bank_id, amount, method, date) VALUES ($1, $2, $3, $4, $5, COALESCE($6, CURRENT_DATE)) RETURNING *', [req.body.source_account_id || null, req.body.recipient, req.body.recipient_bank_id || null, req.body.amount, req.body.method, req.body.date || null]);
         if (req.body.source_account_id) await pool.query('UPDATE savings_accounts SET balance = balance - $1 WHERE id = $2', [req.body.amount, req.body.source_account_id]);
         notifyAdmin(`Loan Issued.`);
         res.json(result.rows[0]);
     } catch (err) { res.status(500).json({ error: err.message }); } });
 app.put('/api/lending/:id', async (req, res) => { try { await pool.query('BEGIN');
         const old = (await pool.query('SELECT * FROM lending WHERE id = $1', [req.params.id])).rows[0];
+  await assertNotInvestmentManagedAccount(old?.source_account_id, 'lending edit rollback');
         if (old.source_account_id) await pool.query('UPDATE savings_accounts SET balance = balance + $1 WHERE id = $2', [old.amount, old.source_account_id]);
         const { source_account_id, recipient, recipient_bank_id, amount, method, date } = req.body;
+  await assertNotInvestmentManagedAccount(source_account_id, 'lending update source');
         const result = await pool.query(`UPDATE lending SET source_account_id=$1, recipient=$2, recipient_bank_id=$3, amount=$4, method=$5, date=COALESCE($6, CURRENT_DATE), status='EDITED' WHERE id=$7 RETURNING *`, [source_account_id || null, recipient, recipient_bank_id || null, amount, method, date || null, req.params.id]);
         if (source_account_id) await pool.query('UPDATE savings_accounts SET balance = balance - $1 WHERE id = $2', [amount, source_account_id]);
         await pool.query('COMMIT');
@@ -940,6 +1536,7 @@ app.put('/api/lending/:id', async (req, res) => { try { await pool.query('BEGIN'
     } catch (e) { await pool.query('ROLLBACK'); res.status(500).json({error: e.message}); } });
 app.delete('/api/lending/:id', async (req, res) => { try { await pool.query('BEGIN');
         const old = (await pool.query('SELECT l.*, b.name as bank FROM lending l LEFT JOIN savings_accounts s ON l.source_account_id = s.id LEFT JOIN banks b ON s.bank_id = b.id WHERE l.id = $1', [req.params.id])).rows[0];
+  await assertNotInvestmentManagedAccount(old?.source_account_id, 'lending delete rollback');
         if (old.source_account_id) await pool.query('UPDATE savings_accounts SET balance = balance + $1 WHERE id = $2', [old.amount, old.source_account_id]);
         await pool.query(`UPDATE lending SET status='DELETED' WHERE id=$1`, [req.params.id]);
         await pool.query('COMMIT');

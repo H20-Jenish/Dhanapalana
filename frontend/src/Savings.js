@@ -173,8 +173,16 @@ const Savings = () => {
                   <strong style={{ fontSize: '1.1rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
                     🏦 {item.bank_name}
                     {item.account_type && <span style={{ fontSize: '10px', padding: '2px 8px', background: 'rgba(150,150,150,0.1)', borderRadius: '12px', fontWeight: 'bold', textTransform: 'uppercase' }}>{item.account_type}</span>}
+                    {item.is_system_managed && item.management_source === 'INVESTMENT' && (
+                      <span style={{ fontSize: '10px', padding: '2px 8px', background: 'rgba(14,165,233,0.15)', borderRadius: '12px', fontWeight: 'bold', textTransform: 'uppercase', color: '#0ea5e9' }}>
+                        Managed by Investment
+                      </span>
+                    )}
                   </strong>
-                  <span className="text-muted" style={{ fontSize: '13px' }}>Currency: {item.currency}</span>
+                  <span className="text-muted" style={{ fontSize: '13px' }}>
+                    Currency: {item.currency}
+                    {item.linked_investment_name ? ` • Linked Asset: ${item.linked_investment_name}` : ''}
+                  </span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
                   <div style={{ textAlign: 'right' }}>
@@ -182,8 +190,8 @@ const Savings = () => {
                     <strong style={{ fontSize: '1.25rem' }}>C${parseFloat(item.balance).toLocaleString('en-US', {minimumFractionDigits: 2})}</strong>
                   </div>
                   <div style={{ display: 'flex', gap: '8px' }}>
-                    <button onClick={() => openAddModal(item)} className="glass-button glass-button-warning" style={{ padding: '6px 12px', fontSize: '12px', borderRadius: '6px' }}>Edit</button>
-                    <button onClick={() => handleDelete(item.id)} className="glass-button glass-button-danger" style={{ padding: '6px 12px', fontSize: '12px', borderRadius: '6px' }}>Delete</button>
+                    <button disabled={item.is_system_managed && item.management_source === 'INVESTMENT'} onClick={() => openAddModal(item)} className="glass-button glass-button-warning" style={{ padding: '6px 12px', fontSize: '12px', borderRadius: '6px', opacity: item.is_system_managed && item.management_source === 'INVESTMENT' ? 0.5 : 1, cursor: item.is_system_managed && item.management_source === 'INVESTMENT' ? 'not-allowed' : 'pointer' }}>Edit</button>
+                    <button disabled={item.is_system_managed && item.management_source === 'INVESTMENT'} onClick={() => handleDelete(item.id)} className="glass-button glass-button-danger" style={{ padding: '6px 12px', fontSize: '12px', borderRadius: '6px', opacity: item.is_system_managed && item.management_source === 'INVESTMENT' ? 0.5 : 1, cursor: item.is_system_managed && item.management_source === 'INVESTMENT' ? 'not-allowed' : 'pointer' }}>Delete</button>
                   </div>
                 </div>
               </li>

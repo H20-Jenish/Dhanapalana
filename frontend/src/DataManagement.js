@@ -60,6 +60,8 @@ const DataManagement = () => {
   const [banks, setBanks] = useState([]);
   const [recipientBanks, setRecipientBanks] = useState([]);
   const [accountTypes, setAccountTypes] = useState([]);
+  const [typeOfAssets, setTypeOfAssets] = useState([]);
+  const [investmentTypes, setInvestmentTypes] = useState([]);
   const [creditCards, setCreditCards] = useState([]);
   const [draggingCategoryId, setDraggingCategoryId] = useState(null);
   const [hoveredCategoryId, setHoveredCategoryId] = useState(null);
@@ -70,6 +72,8 @@ const DataManagement = () => {
   const [newBank, setNewBank] = useState('');
   const [newRecipBank, setNewRecipBank] = useState('');
   const [newAccountType, setNewAccountType] = useState('');
+  const [newTypeOfAsset, setNewTypeOfAsset] = useState('');
+  const [newInvestmentType, setNewInvestmentType] = useState('');
   
   const [activeModal, setActiveModal] = useState(null); 
   const [error, setError] = useState('');
@@ -86,6 +90,8 @@ const DataManagement = () => {
       setBanks((await axios.get(`${API_URL}/banks`)).data);
       setRecipientBanks((await axios.get(`${API_URL}/recipient-banks`)).data);
       setAccountTypes((await axios.get(`${API_URL}/account-types`)).data);
+      setTypeOfAssets((await axios.get(`${API_URL}/type-of-assets`)).data);
+      setInvestmentTypes((await axios.get(`${API_URL}/investment-types`)).data);
       setCreditCards((await axios.get(`${API_URL}/credit-cards`)).data);
     } catch (err) { setError("Access Denied: You must be an Administrator."); }
   };
@@ -246,6 +252,8 @@ const DataManagement = () => {
         <AdminCard icon={<IconFolder />} title="Categories" description={`${categories.length} active spending categories.`} accentColor="#8b5cf6" onClick={() => setActiveModal('categories')} />
         <AdminCard icon={<IconBank />} title="My Banks" description={`${banks.length} financial institutions configured.`} accentColor="#14b8a6" onClick={() => setActiveModal('banks')} />
         <AdminCard icon={<IconTag />} title="Account Types" description={`${accountTypes.length} ledger types (e.g. Checking).`} accentColor="#ec4899" onClick={() => setActiveModal('accountTypes')} />
+        <AdminCard icon={<IconTag />} title="Type of Asset" description={`${typeOfAssets.length} registered asset wrappers (FHSA/TFSA/etc.).`} accentColor="#0ea5e9" onClick={() => setActiveModal('typeOfAssets')} />
+        <AdminCard icon={<IconTag />} title="Investment Type" description={`${investmentTypes.length} investment classes (Stocks/ETFs/Crypto/etc.).`} accentColor="#22c55e" onClick={() => setActiveModal('investmentTypes')} />
         <AdminCard icon={<IconCreditCard />} title="Credit Cards" description={`${creditCards.length} active credit configurations.`} accentColor="#f43f5e" onClick={() => setActiveModal('creditCards')} />
         <AdminCard icon={<IconRoute />} title="Recipient Banks" description={`${recipientBanks.length} external routing destinations.`} accentColor="#6366f1" onClick={() => setActiveModal('recipientBanks')} />
       </div>
@@ -340,6 +348,26 @@ const DataManagement = () => {
             <button type="submit" className="glass-button" style={{ padding: '0 24px' }}>Add</button>
           </form>
           {renderList(accountTypes, 'account-types', false)}
+        </ModalWrapper>
+      )}
+
+      {activeModal === 'typeOfAssets' && (
+        <ModalWrapper title="Manage Type of Asset" onClose={() => setActiveModal(null)}>
+          <form onSubmit={(e) => handleAdd(e, 'type-of-assets', newTypeOfAsset, setNewTypeOfAsset)} style={{ display: 'flex', gap: '10px', marginBottom: '24px' }}>
+            <input type="text" placeholder="e.g., FHSA, TFSA, RRSP" value={newTypeOfAsset} onChange={e => setNewTypeOfAsset(e.target.value)} required className="glass-input" style={{ flex: 1 }} />
+            <button type="submit" className="glass-button" style={{ padding: '0 24px' }}>Add</button>
+          </form>
+          {renderList(typeOfAssets, 'type-of-assets', false)}
+        </ModalWrapper>
+      )}
+
+      {activeModal === 'investmentTypes' && (
+        <ModalWrapper title="Manage Investment Types" onClose={() => setActiveModal(null)}>
+          <form onSubmit={(e) => handleAdd(e, 'investment-types', newInvestmentType, setNewInvestmentType)} style={{ display: 'flex', gap: '10px', marginBottom: '24px' }}>
+            <input type="text" placeholder="e.g., Stocks/ETFs, Crypto" value={newInvestmentType} onChange={e => setNewInvestmentType(e.target.value)} required className="glass-input" style={{ flex: 1 }} />
+            <button type="submit" className="glass-button" style={{ padding: '0 24px' }}>Add</button>
+          </form>
+          {renderList(investmentTypes, 'investment-types', false)}
         </ModalWrapper>
       )}
 

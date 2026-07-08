@@ -59,7 +59,10 @@ CREATE TABLE savings_accounts (
     bank_id INTEGER REFERENCES banks(id),      -- Foreign key to banks table
     account_type_id INTEGER REFERENCES account_types(id), -- Chequing/Savings type
     currency TEXT DEFAULT 'CAD',               -- Account currency (CAD, USD, etc.)
-    balance DECIMAL(15,2) DEFAULT 0.00         -- Current account balance
+    balance DECIMAL(15,2) DEFAULT 0.00,        -- Current account balance
+    is_system_managed BOOLEAN DEFAULT FALSE,
+    management_source TEXT,
+    linked_investment_id INTEGER
 );
 
 -- ===========================================
@@ -142,10 +145,36 @@ CREATE TABLE investments (
     id SERIAL PRIMARY KEY,
     name TEXT NOT NULL,                        -- Investment account name
     bank_id INTEGER REFERENCES banks(id),      -- Associated bank
-    type TEXT NOT NULL,                        -- Investment type (e.g., 'TFSA', 'RRSP')
+    type TEXT,                                 -- Legacy investment type label
     status TEXT DEFAULT 'ACTIVE',              -- Account status
-    account_type_id INTEGER REFERENCES account_types(id) -- Account type
+    account_type_id INTEGER REFERENCES account_types(id), -- Legacy account type
+    type_of_asset_id INTEGER,
+    investment_type_id INTEGER
 );
+
+ALTER TABLE savings_accounts
+    ADD CONSTRAINT savings_accounts_linked_investment_id_fkey
+    FOREIGN KEY (linked_investment_id) REFERENCES investments(id);
+
+-- Type of Asset master data (FHSA/TFSA/RRSP/RESP/etc.)
+CREATE TABLE type_of_assets (
+    id SERIAL PRIMARY KEY,
+    name TEXT UNIQUE NOT NULL
+);
+
+-- Investment Type master data (Stocks/ETFs/Crypto/etc.)
+CREATE TABLE investment_types (
+    id SERIAL PRIMARY KEY,
+    name TEXT UNIQUE NOT NULL
+);
+
+ALTER TABLE investments
+    ADD CONSTRAINT investments_type_of_asset_id_fkey
+    FOREIGN KEY (type_of_asset_id) REFERENCES type_of_assets(id);
+
+ALTER TABLE investments
+    ADD CONSTRAINT investments_investment_type_id_fkey
+    FOREIGN KEY (investment_type_id) REFERENCES investment_types(id);
 
 -- Logs for investment balance changes and contributions
 CREATE TABLE investment_logs (
@@ -155,6 +184,32 @@ CREATE TABLE investment_logs (
     balance DECIMAL(15,2) NOT NULL,           -- Balance at this date
     net_contribution DECIMAL(15,2) DEFAULT 0.00, -- Net contribution
     status TEXT DEFAULT 'ACTIVE'              -- Log status
+);
+
+-- Position-level holdings for securities-style investments
+CREATE TABLE investment_positions (
+    id SERIAL PRIMARY KEY,
+    investment_id INTEGER REFERENCES investments(id) ON DELETE CASCADE,
+    ticker TEXT NOT NULL,
+    unit_price DECIMAL(15,4) NOT NULL,
+    amount DECIMAL(15,2) NOT NULL,
+    quantity DECIMAL(20,8) NOT NULL,
+    purchase_date DATE DEFAULT CURRENT_DATE,
+    priced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    price_source TEXT DEFAULT 'manual',
+    transaction_type TEXT DEFAULT 'INITIAL_PURCHASE',
+    status TEXT DEFAULT 'ACTIVE'
+);
+
+-- Timeline/activity entries for the Investment page
+CREATE TABLE investment_activity_logs (
+    id SERIAL PRIMARY KEY,
+    investment_id INTEGER REFERENCES investments(id) ON DELETE CASCADE,
+    action_type TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    metadata JSONB DEFAULT '{}'::jsonb,
+    actor TEXT DEFAULT 'system',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- System notifications for users
@@ -212,6 +267,10 @@ INSERT INTO credit_cards (name, limit_amount) VALUES
 
 -- Account type classifications
 INSERT INTO account_types (name) VALUES ('Chequing'), ('Savings');
+
+-- Default investment taxonomy
+INSERT INTO type_of_assets (name) VALUES ('FHSA'), ('TFSA'), ('RRSP'), ('RESP'), ('Non-Registered');
+INSERT INTO investment_types (name) VALUES ('Stocks/ETFs'), ('Crypto'), ('Real Estate'), ('Mutual Funds');
 
 -- ===========================================
 -- 8. QUERY DESIGNER
